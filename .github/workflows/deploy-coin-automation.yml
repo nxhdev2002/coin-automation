@@ -1,0 +1,98 @@
+name: Deploy coin-automation to VPS
+
+on:
+  push:
+    tags:
+      - 'coin-automation-v*'
+  workflow_dispatch:
+
+env:
+  SERVICE_NAME: coin-automation
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Infisical CLI
+        run: |
+          curl -1sLf 'https://infisical.com/install/cli.sh' | sudo bash
+          infisical --version
+
+      - name: Fetch VPS credentials
+        id: vps
+        run: |
+          infisical login --client-id ${{ secrets.INFISICAL_CLIENT_ID }} --client-secret ${{ secrets.INFISICAL_CLIENT_SECRET }}
+          VPS_HOST=$(infisical secrets get VPS_HOST --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          VPS_USERNAME=$(infisical secrets get VPS_USERNAME --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          VPS_PASSWORD=$(infisical secrets get VPS_PASSWORD --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          VPS_PORT=$(infisical secrets get VPS_PORT --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          VPS_COIN_AUTOMATION_DIR=$(infisical secrets get VPS_COIN_AUTOMATION_DIR --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          echo "VPS_HOST=$VPS_HOST" >> $GITHUB_OUTPUT
+          echo "VPS_USERNAME=$VPS_USERNAME" >> $GITHUB_OUTPUT
+          echo "VPS_PORT=$VPS_PORT" >> $GITHUB_OUTPUT
+          echo "VPS_COIN_AUTOMATION_DIR=$VPS_COIN_AUTOMATION_DIR" >> $GITHUB_OUTPUT
+          echo "::add-mask::$VPS_PASSWORD"
+          echo "VPS_PASSWORD=$VPS_PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Fetch app secrets
+        id: app
+        run: |
+          CORE_API_URL=$(infisical secrets get CORE_API_URL --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          CORE_API_KEY=$(infisical secrets get CORE_API_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          TWO_CAPTCHA_API_KEY=$(infisical secrets get TWO_CAPTCHA_API_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          ES_URI=$(infisical secrets get ELASTICSEARCH__URI --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          ES_USERNAME=$(infisical secrets get ELASTICSEARCH__USERNAME --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          ESPASSWORD=$(infisical secrets get ELASTICSEARCH__PASSWORD --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          ES_INDEX=$(infisical secrets get ELASTICSEARCH__INDEX_FORMAT --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          echo "::add-mask::$CORE_API_KEY"
+          echo "::add-mask::$TWO_CAPTCHA_API_KEY"
+          echo "::add-mask::$ESURI"
+          echo "::add-mask::$ESPASSWORD"
+          echo "CORE_API_URL=$CORE_API_URL" >> $GITHUB_OUTPUT
+          echo "CORE_API_KEY=$CORE_API_KEY" >> $GITHUB_OUTPUT
+          echo "TWO_CAPTCHA_API_KEY=$TWO_CAPTCHA_API_KEY" >> $GITHUB_OUTPUT
+          echo "ES_URI=$ESURI" >> $GITHUB_OUTPUT
+          echo "ES_USERNAME=$ESUSERNAME" >> $GITHUB_OUTPUT
+          echo "ES_PASSWORD=$ESPASSWORD" >> $GITHUB_OUTPUT
+          echo "ES_INDEX=$ES_INDEX" >> $GITHUB_OUTPUT
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p ${{ steps.vps.outputs.VPS_PORT }} ${{ steps.vps.outputs.VPS_HOST }} >> ~/.ssh/known_hosts
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ steps.vps.outputs.VPS_HOST }}
+          username: ${{ steps.vps.outputs.VPS_USERNAME }}
+          password: ${{ steps.vps.outputs.VPS_PASSWORD }}
+          port: ${{ steps.vps.outputs.VPS_PORT }}
+          script: |
+            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}
+            git pull origin main
+            .venv\Scripts\python.exe -m pip install -r requirements.txt
+            nssm stop ${{ env.SERVICE_NAME }} 2>nul
+            nssm set ${{ env.SERVICE_NAME }} AppEnvironmentExtra CORE_API_URL=${{ steps.app.outputs.CORE_API_URL }} CORE_API_KEY=${{ steps.app.outputs.CORE_API_KEY }} TWO_CAPTCHA_API_KEY=${{ steps.app.outputs.TWO_CAPTCHA_API_KEY }} ELASTICSEARCH__URI=${{ steps.app.outputs.ES_URI }} ELASTICSEARCH__USERNAME=${{ steps.app.outputs.ES_USERNAME }} ELASTICSEARCH__PASSWORD=${{ steps.app.outputs.ES_PASSWORD }} ELASTICSEARCH__INDEX_FORMAT=${{ steps.app.outputs.ES_INDEX }}
+            nssm start ${{ env.SERVICE_NAME }}
+            sc query ${{ env.SERVICE_NAME }}
+            curl -s http://localhost:8000/health || echo "Health check failed"
+
+      - name: Telegram notify
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          message: |
+            coin-automation deploy ${{ job.status }}
+            Tag: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
