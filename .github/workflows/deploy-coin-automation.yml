@@ -3,7 +3,7 @@ name: Deploy coin-automation to VPS
 on:
   push:
     tags:
-      - 'coin-automation-v*'
+      - 'v*'
   workflow_dispatch:
 
 env:
