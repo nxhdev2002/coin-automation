@@ -1,0 +1,9 @@
+[project]
+name = "coin-automation"
+version = "0.1.0"
+description = "TikTok coin auto-fulfillment service using nodriver stealth browser automation"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

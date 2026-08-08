@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Browser profiles (contains cookies, session data)
+profiles/
+poc/profiles/
+poc/poc_session/
+poc/test_full/
+poc/test_minimal/
+poc/test_minimal2/
+
+# Screenshots
+screenshots/
+poc/poc_screenshots/
+*.png
+
+# Logs
+logs/
+*.log
+poc/*.log
+
+# Environment / secrets
+.env
+.env.*
+*.local
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

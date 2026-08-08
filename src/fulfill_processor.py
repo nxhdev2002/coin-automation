@@ -1,0 +1,178 @@
+import asyncio
+
+from loguru import logger
+
+from .automation.browser import launch_browser, wait_for_element
+from .automation.tiktok_login import qr_login, check_logged_in
+from .automation.tiktok_recharge import (
+    select_package, click_recharge, select_add_card,
+)
+from .automation.tiktok_payment import (
+    fill_card_form, click_pay_now, wait_for_payment_result,
+    take_screenshot, parse_end_result_url,
+)
+from .automation.selectors import SELECTORS
+from .callback.core_client import CoreClient
+from .config import get_settings
+from .concurrency.lock_manager import get_lock_manager
+from .models.fulfill import FulfillRequest, FulfillResult
+
+
+async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
+    settings = get_settings()
+    lock_mgr = get_lock_manager()
+
+    await lock_mgr.acquire(request.tiktok_username)
+    try:
+        return await _do_fulfill(request, core_client, settings)
+    except Exception as e:
+        logger.error(f"Fulfillment error: {e}")
+        return FulfillResult(
+            success=False,
+            failure_category="Unknown",
+            failure_reason=str(e),
+        )
+    finally:
+        lock_mgr.release(request.tiktok_username)
+
+
+async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+    profile_path = f"{settings.profile_dir}\\{request.tiktok_username}"
+
+    await core_client.update_order(request.order_id, {
+        "fulfillmentPhase": "LaunchingBrowser",
+    })
+
+    browser = await launch_browser(profile_path)
+
+    try:
+        tab = await browser.get("https://www.tiktok.com/login")
+        await asyncio.sleep(3)
+
+        logged_in = await check_logged_in(tab)
+        if not logged_in:
+            logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
+            if not logged_in:
+                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+                return FulfillResult(
+                    success=False,
+                    failure_category="QrScanTimeout",
+                    failure_reason="QR scan timeout",
+                    screenshot_path=screenshot,
+                )
+
+        await core_client.update_order(request.order_id, {
+            "fulfillmentPhase": "PurchasingCoins",
+        })
+
+        tab = await browser.get(SELECTORS["recharge_url"])
+        await asyncio.sleep(4)
+
+        selected = await select_package(tab, request.coin_amount)
+        if not selected:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="UiElementNotFound",
+                failure_reason=f"Could not select package for {request.coin_amount} coins",
+                screenshot_path=screenshot,
+            )
+
+        recharged = await click_recharge(tab)
+        if not recharged:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="UiElementNotFound",
+                failure_reason="Could not click Recharge button",
+                screenshot_path=screenshot,
+            )
+
+        add_card_ok = await select_add_card(tab)
+        if not add_card_ok:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="UiElementNotFound",
+                failure_reason="Could not select Add Card payment method",
+                screenshot_path=screenshot,
+            )
+
+        iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=10)
+        if not iframe_visible:
+                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+                return FulfillResult(
+                    success=False,
+                    failure_category="UiElementNotFound",
+                    failure_reason="Pipopay iframe not visible after selecting Add Card",
+                    screenshot_path=screenshot,
+                )
+
+        await core_client.update_order(request.order_id, {
+            "fulfillmentPhase": "PaymentInProgress",
+        })
+
+        filled = await fill_card_form(
+            browser, tab,
+            card_number=request.card_number,
+            card_cvv=request.card_cvv,
+            card_expiry=request.card_expiry,
+            card_holder=request.card_holder_name,
+        )
+        if not filled:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="UiElementNotFound",
+                failure_reason="Could not fill card form",
+                screenshot_path=screenshot,
+            )
+
+        await asyncio.sleep(1)
+
+        paid = await click_pay_now(tab)
+        if not paid:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="UiElementNotFound",
+                failure_reason="Could not click Pay now button",
+                screenshot_path=screenshot,
+            )
+
+        result = await wait_for_payment_result(browser, tab, timeout_seconds=30)
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+
+        if result.get("payment_status") == "success":
+            logger.info(f"Payment SUCCESS for order {request.order_id}")
+            return FulfillResult(
+                success=True,
+                screenshot_path=screenshot,
+                fulfillment_phase="Done",
+            )
+        else:
+            error_code = result.get("error_code", "")
+            if "3DS" in error_code.upper():
+                category = "OtpRequired"
+                reason = f"3DS verification failed: {result.get('message', '')}"
+            elif "RISK" in error_code.upper():
+                category = "PaymentFailed"
+                reason = f"Payment rejected: {error_code} - {result.get('message', '')}"
+            else:
+                category = "PaymentFailed"
+                reason = f"Payment failed: {error_code or result.get('payment_status', 'unknown')}"
+
+            logger.warning(f"Payment FAILED for order {request.order_id}: {reason}")
+            return FulfillResult(
+                success=False,
+                failure_category=category,
+                failure_reason=reason,
+                screenshot_path=screenshot,
+                fulfillment_phase="Done",
+            )
+
+    finally:
+        try:
+            browser.stop()
+        except Exception:
+            pass
