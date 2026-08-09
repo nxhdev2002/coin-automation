@@ -2,6 +2,22 @@ import asyncio
 import sys
 import warnings
 
+def patch_nodriver():
+    try:
+        import nodriver
+        p = nodriver.cdp.network.__file__
+        with open(p, 'rb') as f:
+            content = f.read()
+        if b'\xb1Inf' in content:
+            content = content.replace(b'\xb1Inf', b'+/-Inf')
+            with open(p, 'wb') as f:
+                f.write(content)
+            print("Patched nodriver network.py (non-UTF-8 char)")
+    except Exception as e:
+        print(f"nodriver patch skipped: {e}")
+
+patch_nodriver()
+
 if sys.platform == "win32":
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     loop = asyncio.ProactorEventLoop()
