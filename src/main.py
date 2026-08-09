@@ -13,10 +13,10 @@ from .api.health import router as health_router
 
 async def load_settings() -> Settings:
     infisical_base = os.getenv("INFISICAL_BASE_URL", "https://app.infisical.com")
-    infisical_client_id = os.getenv("INFISICAL_CLIENT_ID", "")
-    infisical_client_secret = os.getenv("INFISICAL_CLIENT_SECRET", "")
-    infisical_project_id = os.getenv("INFISICAL_PROJECT_ID", "")
-    infisical_env = os.getenv("INFISICAL_ENVIRONMENT", "prod")
+    infisical_client_id = os.getenv("INFISICAL_CLIENT_ID", "6b79236c-77c0-4f06-9e40-f4336d4bc624")
+    infisical_client_secret = os.getenv("INFISICAL_CLIENT_SECRET", "3691b0c52256c3c22c02aeb8ab6d4264e8ca93da195a340c7a9eb5c6bdaa1f04")
+    infisical_project_id = os.getenv("INFISICAL_PROJECT_ID", "96d76d26-ce6a-4288-887a-05f981391a21")
+    infisical_env = os.getenv("INFISICAL_ENVIRONMENT", "dev")
     infisical_path = os.getenv("INFISICAL_SECRET_PATH", "/coin-automation")
 
     if infisical_client_id and infisical_client_secret:
@@ -45,9 +45,13 @@ async def load_settings() -> Settings:
                 secrets_resp.raise_for_status()
 
                 secrets = {}
-                for item in secrets_resp.json().get("secrets", []):
-                    key = item["key"].replace("__", ".")
-                    secrets[key] = item["value"]
+                raw_secrets = secrets_resp.json().get("secrets", [])
+                logger.debug(f"Infisical raw response keys: {list(secrets_resp.json().keys())}")
+                for item in raw_secrets:
+                    k = item.get("secretKey") or item.get("key") or ""
+                    v = item.get("secretValue") or item.get("value") or ""
+                    if k:
+                        secrets[k.replace("__", ".")] = v
 
                 logger.info(f"Loaded {len(secrets)} secrets from Infisical:")
                 for key, val in secrets.items():
@@ -69,7 +73,7 @@ async def load_settings() -> Settings:
                     es_password=secrets.get("ELASTICSEARCH.PASSWORD", ""),
                 )
         except Exception as e:
-            logger.warning(f"Infisical fetch failed: {e}, using env/defaults")
+            logger.warning(f"Infisical fetch failed: {type(e).__name__}: {e}, using env/defaults")
     else:
         logger.info("Infisical credentials not set, loading from env/defaults")
 
