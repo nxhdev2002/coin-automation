@@ -6,6 +6,7 @@ from .automation.browser import launch_browser, wait_for_element
 from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
     select_package, click_recharge, select_add_card,
+    skip_link_card_prompt,
 )
 from .automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
@@ -99,6 +100,8 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 failure_reason="Could not select Add Card payment method",
                 screenshot_path=screenshot,
             )
+
+        await skip_link_card_prompt(tab)
 
         iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=10)
         if not iframe_visible:

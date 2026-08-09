@@ -76,6 +76,36 @@ async def select_add_card(tab) -> bool:
     return bool(result)
 
 
+async def skip_link_card_prompt(tab) -> bool:
+    """Dismiss any 'Link card to account' / 'Save card' prompt that appears after selecting Add Card."""
+    await asyncio.sleep(2)
+    js = """
+    (() => {
+        const clickByText = (keywords) => {
+            const btns = document.querySelectorAll('button, a, [role="button"]');
+            for (const b of btns) {
+                const txt = (b.textContent || '').toLowerCase().trim();
+                for (const kw of keywords) {
+                    if (txt.includes(kw)) { b.click(); return kw; }
+                }
+            }
+            return null;
+        };
+        let clicked = clickByText(['not now', 'skip', 'cancel', 'close', 'later', 'không']);
+        if (clicked) return 'clicked: ' + clicked;
+        const closeBtn = document.querySelector('[data-e2e="modal-close"], [aria-label="Close"], [class*="close"]');
+        if (closeBtn) { closeBtn.click(); return 'clicked: close-btn'; }
+        const checkbox = document.querySelector('input[type="checkbox"][class*="save"], input[type="checkbox"][class*="link"]');
+        if (checkbox && checkbox.checked) { checkbox.click(); return 'unchecked save-card'; }
+        return 'no prompt found';
+    })()
+    """
+    result = await tab.evaluate(js)
+    logger.info(f"Skip link card prompt: {result}")
+    await asyncio.sleep(1)
+    return True
+
+
 async def verify_iframe_visible(tab) -> bool:
     js = """
     (() => {
