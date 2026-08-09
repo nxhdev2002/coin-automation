@@ -5,7 +5,7 @@ from loguru import logger
 from .automation.browser import launch_browser, wait_for_element
 from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
-    select_package, click_recharge, select_add_card,
+    select_custom_package, click_recharge, select_add_card,
     skip_link_card_prompt,
 )
 from .automation.tiktok_payment import (
@@ -71,13 +71,13 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         tab = await browser.get(SELECTORS["recharge_url"])
         await asyncio.sleep(4)
 
-        selected = await select_package(tab, request.coin_amount)
+        selected = await select_custom_package(tab, request.coin_amount)
         if not selected:
             screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
             return FulfillResult(
                 success=False,
                 failure_category="UiElementNotFound",
-                failure_reason=f"Could not select package for {request.coin_amount} coins",
+                failure_reason=f"Could not select custom package for {request.coin_amount} coins",
                 screenshot_path=screenshot,
             )
 

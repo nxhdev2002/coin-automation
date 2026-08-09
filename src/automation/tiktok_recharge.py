@@ -5,30 +5,66 @@ from .browser import wait_for_element, click_element_js
 from .selectors import SELECTORS
 
 
-PACKAGE_MAP = {
-    30: 0, 40: 1, 50: 2, 70: 3,
-    90: 4, 150: 5, 200: 6,
-}
-
-
-async def select_package(tab, coin_amount: int) -> bool:
-    idx = PACKAGE_MAP.get(coin_amount)
-    if idx is None:
-        logger.error(f"Unknown coin amount: {coin_amount}")
+async def select_custom_package(tab, coin_amount: int) -> bool:
+    """Select the Custom package option and enter a custom coin amount (min 30)."""
+    custom_selector = SELECTORS["wallet_package_custom"]
+    if not await wait_for_element(tab, custom_selector, timeout=10):
+        logger.warning("Custom package option not found")
         return False
 
-    selector = f'[data-e2e="wallet-package-{idx}"]'
-    if not await wait_for_element(tab, selector, timeout=10):
-        logger.warning(f"Package {idx} not found, trying selected")
-        selector = SELECTORS["wallet_package_selected"]
-
-    ok = await click_element_js(tab, selector)
+    ok = await click_element_js(tab, custom_selector)
     if not ok:
-        ok = await click_element_js(tab, SELECTORS["wallet_package_selected"])
+        logger.warning("Could not click Custom package option")
+        return False
 
     await asyncio.sleep(1)
-    logger.info(f"Selected package {coin_amount} coins (index {idx})")
-    return ok
+
+    js_fill = f"""
+    (() => {{
+        const input = document.querySelector('[data-e2e="wallet-package-coin-custom-input-box"]');
+        if (!input) return 'input not found';
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(input, '{coin_amount}');
+        input.dispatchEvent(new Event('input', {{bubbles: true}}));
+        input.dispatchEvent(new Event('change', {{bubbles: true}}));
+        input.dispatchEvent(new Event('blur', {{bubbles: true}}));
+        return 'filled: ' + input.value;
+    }})()
+    """
+    result = await tab.evaluate(js_fill)
+    logger.info(f"Custom package filled: {result}")
+
+    if "input not found" in str(result):
+        return False
+
+    await asyncio.sleep(2)
+
+    js_check = """
+    (() => {
+        const btn = document.querySelector('[data-e2e="wallet-buy-now-button"]');
+        if (!btn) return { found: false };
+        const body = document.body.innerText || '';
+        const minMatch = body.match(/Minimum:\\s*(\\d+)/i);
+        return {
+            found: true,
+            disabled: btn.disabled,
+            minError: minMatch ? minMatch[0] : null
+        };
+    })()
+    """
+    check = await tab.evaluate(js_check)
+    logger.info(f"Recharge button check: {check}")
+
+    if check and check.get("minError"):
+        logger.error(f"Coin amount below minimum: {check['minError']}")
+        return False
+
+    if check and check.get("disabled"):
+        logger.warning("Recharge button still disabled after custom amount")
+        return False
+
+    logger.info(f"Custom package selected: {coin_amount} coins")
+    return True
 
 
 async def click_recharge(tab) -> bool:
