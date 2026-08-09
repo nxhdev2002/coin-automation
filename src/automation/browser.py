@@ -19,6 +19,7 @@ async def launch_browser(profile_path: str, headless: bool = False):
     kwargs = {
         "browser_args": args,
         "user_data_dir": profile_path,
+        "sandbox": False,
     }
     if headless:
         kwargs["headless"] = True
