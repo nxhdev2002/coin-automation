@@ -28,12 +28,12 @@ jobs:
       - name: Fetch VPS credentials
         id: vps
         run: |
-          infisical login --client-id ${{ secrets.INFISICAL_CLIENT_ID }} --client-secret ${{ secrets.INFISICAL_CLIENT_SECRET }}
-          VPS_HOST=$(infisical secrets get VPS_HOST --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
-          VPS_USERNAME=$(infisical secrets get VPS_USERNAME --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
-          VPS_PASSWORD=$(infisical secrets get VPS_PASSWORD --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
-          VPS_PORT=$(infisical secrets get VPS_PORT --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
-          VPS_COIN_AUTOMATION_DIR=$(infisical secrets get VPS_COIN_AUTOMATION_DIR --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /instances/COIN_AUTOMATION_VPS --env prod --plain)
+          export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id="${{ secrets.INFISICAL_CLIENT_ID }}" --client-secret="${{ secrets.INFISICAL_CLIENT_SECRET }}" --plain --silent)
+          VPS_HOST=$(infisical secrets get VPS_HOST --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /instances/COIN_AUTOMATION_VPS --env prod --plain --silent)
+          VPS_USERNAME=$(infisical secrets get VPS_USERNAME --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /instances/COIN_AUTOMATION_VPS --env prod --plain --silent)
+          VPS_PASSWORD=$(infisical secrets get VPS_PASSWORD --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /instances/COIN_AUTOMATION_VPS --env prod --plain --silent)
+          VPS_PORT=$(infisical secrets get VPS_PORT --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /instances/COIN_AUTOMATION_VPS --env prod --plain --silent)
+          VPS_COIN_AUTOMATION_DIR=$(infisical secrets get VPS_COIN_AUTOMATION_DIR --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /instances/COIN_AUTOMATION_VPS --env prod --plain --silent)
           echo "VPS_HOST=$VPS_HOST" >> $GITHUB_OUTPUT
           echo "VPS_USERNAME=$VPS_USERNAME" >> $GITHUB_OUTPUT
           echo "VPS_PORT=$VPS_PORT" >> $GITHUB_OUTPUT
@@ -44,23 +44,24 @@ jobs:
       - name: Fetch app secrets
         id: app
         run: |
-          CORE_API_URL=$(infisical secrets get CORE_API_URL --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          CORE_API_KEY=$(infisical secrets get CORE_API_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          TWO_CAPTCHA_API_KEY=$(infisical secrets get TWO_CAPTCHA_API_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          ES_URI=$(infisical secrets get ELASTICSEARCH__URI --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          ES_USERNAME=$(infisical secrets get ELASTICSEARCH__USERNAME --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          ESPASSWORD=$(infisical secrets get ELASTICSEARCH__PASSWORD --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
-          ES_INDEX=$(infisical secrets get ELASTICSEARCH__INDEX_FORMAT --projectId ${{ secrets.INFISICAL_PROJECT_ID_APP }} --path /coin-automation --env prod --plain)
+          export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id="${{ secrets.INFISICAL_CLIENT_ID }}" --client-secret="${{ secrets.INFISICAL_CLIENT_SECRET }}" --plain --silent)
+          CORE_API_URL=$(infisical secrets get CORE_API_URL --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          CORE_API_KEY=$(infisical secrets get CORE_API_KEY --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          TWO_CAPTCHA_API_KEY=$(infisical secrets get TWO_CAPTCHA_API_KEY --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          ES_URI=$(infisical secrets get ELASTICSEARCH__URI --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          ES_USERNAME=$(infisical secrets get ELASTICSEARCH__USERNAME --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          ES_PASSWORD=$(infisical secrets get ELASTICSEARCH__PASSWORD --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
+          ES_INDEX=$(infisical secrets get ELASTICSEARCH__INDEX_FORMAT --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
           echo "::add-mask::$CORE_API_KEY"
           echo "::add-mask::$TWO_CAPTCHA_API_KEY"
-          echo "::add-mask::$ESURI"
-          echo "::add-mask::$ESPASSWORD"
+          echo "::add-mask::$ES_URI"
+          echo "::add-mask::$ES_PASSWORD"
           echo "CORE_API_URL=$CORE_API_URL" >> $GITHUB_OUTPUT
           echo "CORE_API_KEY=$CORE_API_KEY" >> $GITHUB_OUTPUT
           echo "TWO_CAPTCHA_API_KEY=$TWO_CAPTCHA_API_KEY" >> $GITHUB_OUTPUT
-          echo "ES_URI=$ESURI" >> $GITHUB_OUTPUT
-          echo "ES_USERNAME=$ESUSERNAME" >> $GITHUB_OUTPUT
-          echo "ES_PASSWORD=$ESPASSWORD" >> $GITHUB_OUTPUT
+          echo "ES_URI=$ES_URI" >> $GITHUB_OUTPUT
+          echo "ES_USERNAME=$ES_USERNAME" >> $GITHUB_OUTPUT
+          echo "ES_PASSWORD=$ES_PASSWORD" >> $GITHUB_OUTPUT
           echo "ES_INDEX=$ES_INDEX" >> $GITHUB_OUTPUT
 
       - name: Install and connect Tailscale
