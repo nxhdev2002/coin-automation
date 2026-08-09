@@ -70,6 +70,8 @@ async def load_settings() -> Settings:
                 )
         except Exception as e:
             logger.warning(f"Infisical fetch failed: {e}, using env/defaults")
+    else:
+        logger.info("Infisical credentials not set, loading from env/defaults")
 
     return Settings(
         core_api_url=os.getenv("CORE_API_URL", "http://localhost:443"),
