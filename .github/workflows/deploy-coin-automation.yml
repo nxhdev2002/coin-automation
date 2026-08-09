@@ -84,7 +84,8 @@ jobs:
             setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
             setx INFISICAL_ENVIRONMENT "prod" /M
             setx INFISICAL_SECRET_PATH "/coin-automation" /M
-            powershell -Command "Start-Process -FilePath 'C:\coin\coin-automation\.venv\Scripts\python.exe' -ArgumentList 'C:\coin\coin-automation\run.py' -WorkingDirectory 'C:\coin\coin-automation' -WindowStyle Normal"
+            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc ondemand /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f
+            schtasks /run /tn coin-automation
             timeout /t 15 /nobreak >nul
             curl -s http://localhost:8000/health || echo "Health check failed"
 
