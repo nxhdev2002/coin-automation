@@ -26,7 +26,9 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
     try:
         return await _do_fulfill(request, core_client, settings)
     except Exception as e:
+        import traceback
         logger.error(f"Fulfillment error: {e}")
+        logger.error(traceback.format_exc())
         return FulfillResult(
             success=False,
             failure_category="Unknown",
