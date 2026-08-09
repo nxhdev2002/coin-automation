@@ -14,9 +14,9 @@ from .api.health import router as health_router
 
 async def load_settings() -> Settings:
     infisical_base = os.getenv("INFISICAL_BASE_URL", "https://app.infisical.com")
-    infisical_client_id = os.getenv("INFISICAL_CLIENT_ID", "6b79236c-77c0-4f06-9e40-f4336d4bc624")
-    infisical_client_secret = os.getenv("INFISICAL_CLIENT_SECRET", "3691b0c52256c3c22c02aeb8ab6d4264e8ca93da195a340c7a9eb5c6bdaa1f04")
-    infisical_project_id = os.getenv("INFISICAL_PROJECT_ID", "96d76d26-ce6a-4288-887a-05f981391a21")
+    infisical_client_id = os.getenv("INFISICAL_CLIENT_ID", "")
+    infisical_client_secret = os.getenv("INFISICAL_CLIENT_SECRET", "")
+    infisical_project_id = os.getenv("INFISICAL_PROJECT_ID", "")
     infisical_env = os.getenv("INFISICAL_ENVIRONMENT", "dev")
     infisical_path = os.getenv("INFISICAL_SECRET_PATH", "/coin-automation")
 
