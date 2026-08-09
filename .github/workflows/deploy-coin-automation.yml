@@ -76,6 +76,7 @@ jobs:
           port: ${{ steps.vps.outputs.VPS_PORT }}
           script: |
             cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}
+            git reset --hard HEAD
             git pull origin main
             .venv\Scripts\python.exe -m pip install -r requirements.txt
             powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force"
@@ -84,7 +85,7 @@ jobs:
             setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
             setx INFISICAL_ENVIRONMENT "prod" /M
             setx INFISICAL_SECRET_PATH "/coin-automation" /M
-            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc ondemand /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f
+            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc onlogon /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f
             schtasks /run /tn coin-automation
             timeout /t 15 /nobreak >nul
             curl -s http://localhost:8000/health || echo "Health check failed"
