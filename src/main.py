@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from loguru import logger
 
-from .config import settings, Settings
+from .config import Settings, set_settings
 from .logging_setup import setup_logging
 from .api.fulfill import router as fulfill_router
 from .api.health import router as health_router
@@ -89,8 +89,8 @@ async def load_settings() -> Settings:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global settings
-    settings = await load_settings()
+    s = await load_settings()
+    set_settings(s)
 
     os.makedirs(settings.profile_dir, exist_ok=True)
     os.makedirs(settings.screenshot_dir, exist_ok=True)

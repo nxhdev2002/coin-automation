@@ -20,6 +20,11 @@ class Settings(BaseModel):
 settings: Settings | None = None
 
 
+def set_settings(s: Settings):
+    global settings
+    settings = s
+
+
 def get_settings() -> Settings:
     global settings
     if settings is None:
