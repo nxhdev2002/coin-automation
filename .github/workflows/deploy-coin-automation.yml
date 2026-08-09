@@ -43,10 +43,9 @@ jobs:
           echo "::add-mask::$VPS_PASSWORD"
           echo "VPS_PASSWORD=$VPS_PASSWORD" >> $GITHUB_OUTPUT
 
-      - name: Fetch app secrets
+      - name: Prepare app config
         id: app
         run: |
-          export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id="${{ secrets.INFISICAL_CLIENT_ID }}" --client-secret="${{ secrets.INFISICAL_CLIENT_SECRET }}" --plain --silent)
           echo "INFISICAL_PROJECT_ID_APP=${{ secrets.INFISICAL_PROJECT_ID_APP }}" >> $GITHUB_OUTPUT
 
       - name: Install and connect Tailscale
@@ -79,7 +78,15 @@ jobs:
             cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}
             git pull origin main
             .venv\Scripts\python.exe -m pip install -r requirements.txt
+            if not exist C:\PsTools\psexec.exe (
+              echo PsTools not installed, downloading...
+              powershell -Command "Invoke-WebRequest -Uri https://download.sysinternals.com/files/PSTools.zip -OutFile C:\PSTools.zip; Expand-Archive -Path C:\PSTools.zip -DestinationPath C:\PsTools -Force; Remove-Item C:\PSTools.zip"
+              reg add "HKLM\Software\Sysinternals\PsExec" /v EulaAccepted /t REG_DWORD /d 1 /f
+            )
             nssm stop ${{ env.SERVICE_NAME }} 2>nul
+            nssm set ${{ env.SERVICE_NAME }} Application C:\coin\coin-automation\start-nssm.bat
+            nssm set ${{ env.SERVICE_NAME }} AppParameters ""
+            nssm set ${{ env.SERVICE_NAME }} AppDirectory C:\coin\coin-automation
             setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M
             setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M
             setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
