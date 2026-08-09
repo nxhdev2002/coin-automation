@@ -1,7 +1,12 @@
 import os
 import sys
 import asyncio
+import warnings
 from contextlib import asynccontextmanager
+
+if sys.platform == "win32":
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from fastapi import FastAPI
 from loguru import logger
