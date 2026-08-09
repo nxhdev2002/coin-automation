@@ -2,6 +2,8 @@ name: Deploy coin-automation to VPS
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -67,7 +69,8 @@ jobs:
       - name: Install and connect Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
-          TAILSCALE_KEY=$(infisical secrets get TAILSCALE_AUTH_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /shared --env prod --plain)
+          export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id="${{ secrets.INFISICAL_CLIENT_ID }}" --client-secret="${{ secrets.INFISICAL_CLIENT_SECRET }}" --plain --silent)
+          TAILSCALE_KEY=$(infisical secrets get TAILSCALE_AUTH_KEY --projectId "${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }}" --path /shared --env prod --plain --silent)
           if [ -z "$TAILSCALE_KEY" ]; then
             echo "::error::TAILSCALE_AUTH_KEY is empty"
             exit 1
