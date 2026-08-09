@@ -101,7 +101,15 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 screenshot_path=screenshot,
             )
 
-        await skip_link_card_prompt(tab)
+        save_card_safe = await skip_link_card_prompt(tab)
+        if not save_card_safe:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="SaveCardToggleFailure",
+                failure_reason="SAFETY ABORT: Could not confirm 'Save card' toggle is unchecked — refusing to risk saving system card to customer account",
+                screenshot_path=screenshot,
+            )
 
         iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=10)
         if not iframe_visible:

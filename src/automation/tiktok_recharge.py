@@ -77,33 +77,75 @@ async def select_add_card(tab) -> bool:
 
 
 async def skip_link_card_prompt(tab) -> bool:
-    """Dismiss any 'Link card to account' / 'Save card' prompt that appears after selecting Add Card."""
-    await asyncio.sleep(2)
-    js = """
-    (() => {
-        const clickByText = (keywords) => {
-            const btns = document.querySelectorAll('button, a, [role="button"]');
-            for (const b of btns) {
-                const txt = (b.textContent || '').toLowerCase().trim();
-                for (const kw of keywords) {
-                    if (txt.includes(kw)) { b.click(); return kw; }
-                }
-            }
-            return null;
-        };
-        let clicked = clickByText(['not now', 'skip', 'cancel', 'close', 'later', 'không']);
-        if (clicked) return 'clicked: ' + clicked;
-        const closeBtn = document.querySelector('[data-e2e="modal-close"], [aria-label="Close"], [class*="close"]');
-        if (closeBtn) { closeBtn.click(); return 'clicked: close-btn'; }
-        const checkbox = document.querySelector('input[type="checkbox"][class*="save"], input[type="checkbox"][class*="link"]');
-        if (checkbox && checkbox.checked) { checkbox.click(); return 'unchecked save-card'; }
-        return 'no prompt found';
-    })()
     """
-    result = await tab.evaluate(js)
-    logger.info(f"Skip link card prompt: {result}")
-    await asyncio.sleep(1)
-    return True
+    Ensure the 'Save card' toggle (data-e2e='payment-method-save-button') is UNCHECKED.
+    This prevents the system card from being saved to the customer's TikTok account.
+    Triple-checks to guarantee safety.
+    """
+    selector = '[data-e2e="payment-method-save-button"]'
+
+    def build_check_js():
+        return """
+        (() => {
+            const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+            if (!el) return { found: false, checked: null };
+
+            // Determine checked state via multiple signals
+            const ariaChecked = el.getAttribute('aria-checked');
+            const checkbox = el.querySelector('input[type="checkbox"]');
+            const inputChecked = checkbox ? checkbox.checked : null;
+            const classChecked = el.className.toLowerCase().includes('checked')
+                || el.className.toLowerCase().includes('selected')
+                || el.className.toLowerCase().includes('active');
+
+            const isChecked = ariaChecked === 'true'
+                || inputChecked === true
+                || (ariaChecked === null && inputChecked === null && classChecked);
+
+            return { found: true, checked: isChecked, ariaChecked, inputChecked, classChecked, classes: el.className };
+        })()
+        """
+
+    def build_uncheck_js():
+        return """
+        (() => {
+            const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+            if (!el) return 'not-found';
+            el.scrollIntoView({block: 'center'});
+            el.click();
+            return 'clicked';
+        })()
+        """
+
+    for attempt in range(1, 4):
+        await asyncio.sleep(1)
+        result = await tab.evaluate(build_check_js())
+
+        if not result or not result.get('found'):
+            logger.info(f"[SaveCard] Attempt {attempt}: element not found — likely no save-card toggle on this page")
+            return True
+
+        checked = result.get('checked', True)
+        classes = result.get('classes', '')
+        logger.info(f"[SaveCard] Attempt {attempt}: checked={checked} classes={classes}")
+
+        if not checked:
+            logger.info(f"[SaveCard] Confirmed UNCHECKED on attempt {attempt}")
+            return True
+
+        logger.warning(f"[SaveCard] Save card toggle is CHECKED on attempt {attempt} — unchecking...")
+        click_result = await tab.evaluate(build_uncheck_js())
+        logger.info(f"[SaveCard] Click result: {click_result}")
+        await asyncio.sleep(0.5)
+
+    # Final verification after 3 attempts
+    result = await tab.evaluate(build_check_js())
+    if result and result.get('found') and not result.get('checked'):
+        logger.info("[SaveCard] Confirmed UNCHECKED after retries")
+        return True
+
+    logger.error("[SaveCard] FAILED to uncheck save-card toggle after 3 attempts — ABORTING to protect customer account")
+    return False
 
 
 async def verify_iframe_visible(tab) -> bool:
