@@ -5,7 +5,7 @@ class FulfillRequest(BaseModel):
     order_id: str
     tiktok_username: str
     coin_amount: int
-    card_id: str
+    card_id: str = ""
     card_number: str = ""
     card_cvv: str = ""
     card_expiry: str = ""
