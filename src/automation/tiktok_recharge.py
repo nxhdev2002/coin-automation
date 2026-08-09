@@ -78,73 +78,61 @@ async def select_add_card(tab) -> bool:
 
 async def skip_link_card_prompt(tab) -> bool:
     """
-    Ensure the 'Save card' toggle (data-e2e='payment-method-save-button') is UNCHECKED.
-    This prevents the system card from being saved to the customer's TikTok account.
+    Ensure the 'Link this card for faster checkout' toggle (data-e2e='payment-method-save-button')
+    is UNCHECKED. This prevents the system card from being saved to the customer's TikTok account.
     Triple-checks to guarantee safety.
     """
     selector = '[data-e2e="payment-method-save-button"]'
 
-    def build_check_js():
-        return """
-        (() => {
-            const el = document.querySelector('[data-e2e="payment-method-save-button"]');
-            if (!el) return { found: false, checked: null };
+    if not await wait_for_element(tab, selector, timeout=5):
+        logger.info("[SaveCard] Toggle not found — no save-card option on this page")
+        return True
 
-            // Determine checked state via multiple signals
-            const ariaChecked = el.getAttribute('aria-checked');
-            const checkbox = el.querySelector('input[type="checkbox"]');
-            const inputChecked = checkbox ? checkbox.checked : null;
-            const classChecked = el.className.toLowerCase().includes('checked')
-                || el.className.toLowerCase().includes('selected')
-                || el.className.toLowerCase().includes('active');
+    check_js = """
+    (() => {
+        const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+        if (!el) return { found: false, checked: null };
+        const input = el.querySelector('input[type="checkbox"]');
+        return { found: true, checked: input ? input.checked : null };
+    })()
+    """
 
-            const isChecked = ariaChecked === 'true'
-                || inputChecked === true
-                || (ariaChecked === null && inputChecked === null && classChecked);
-
-            return { found: true, checked: isChecked, ariaChecked, inputChecked, classChecked, classes: el.className };
-        })()
-        """
-
-    def build_uncheck_js():
-        return """
-        (() => {
-            const el = document.querySelector('[data-e2e="payment-method-save-button"]');
-            if (!el) return 'not-found';
-            el.scrollIntoView({block: 'center'});
-            el.click();
-            return 'clicked';
-        })()
-        """
+    uncheck_js = """
+    (() => {
+        const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+        if (!el) return 'not-found';
+        const input = el.querySelector('input[type="checkbox"]');
+        if (input) { input.click(); return 'clicked-input'; }
+        el.click(); return 'clicked-div';
+    })()
+    """
 
     for attempt in range(1, 4):
         await asyncio.sleep(1)
-        result = await tab.evaluate(build_check_js())
+        result = await tab.evaluate(check_js)
 
         if not result or not result.get('found'):
-            logger.info(f"[SaveCard] Attempt {attempt}: element not found — likely no save-card toggle on this page")
+            logger.info(f"[SaveCard] Attempt {attempt}: element not found — safe")
             return True
 
-        checked = result.get('checked', True)
-        classes = result.get('classes', '')
-        logger.info(f"[SaveCard] Attempt {attempt}: checked={checked} classes={classes}")
+        checked = result.get('checked')
+        logger.info(f"[SaveCard] Attempt {attempt}: checked={checked}")
 
         if not checked:
             logger.info(f"[SaveCard] Confirmed UNCHECKED on attempt {attempt}")
             return True
 
-        logger.warning(f"[SaveCard] Save card toggle is CHECKED on attempt {attempt} — unchecking...")
-        click_result = await tab.evaluate(build_uncheck_js())
+        logger.warning(f"[SaveCard] Toggle is CHECKED on attempt {attempt} — clicking to uncheck...")
+        click_result = await tab.evaluate(uncheck_js)
         logger.info(f"[SaveCard] Click result: {click_result}")
         await asyncio.sleep(0.5)
 
-    # Final verification after 3 attempts
-    result = await tab.evaluate(build_check_js())
-    if result and result.get('found') and not result.get('checked'):
+    final = await tab.evaluate(check_js)
+    if final and not final.get('checked'):
         logger.info("[SaveCard] Confirmed UNCHECKED after retries")
         return True
 
-    logger.error("[SaveCard] FAILED to uncheck save-card toggle after 3 attempts — ABORTING to protect customer account")
+    logger.error("[SaveCard] FAILED to uncheck after 3 attempts — ABORTING to protect customer account")
     return False
 
 
