@@ -47,24 +47,7 @@ jobs:
         id: app
         run: |
           export INFISICAL_TOKEN=$(infisical login --method=universal-auth --client-id="${{ secrets.INFISICAL_CLIENT_ID }}" --client-secret="${{ secrets.INFISICAL_CLIENT_SECRET }}" --plain --silent)
-          CORE_API_URL=$(infisical secrets get CORE_API_URL --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          CORE_API_KEY=$(infisical secrets get CORE_API_KEY --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          TWO_CAPTCHA_API_KEY=$(infisical secrets get TWO_CAPTCHA_API_KEY --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          ES_URI=$(infisical secrets get ELASTICSEARCH__URI --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          ES_USERNAME=$(infisical secrets get ELASTICSEARCH__USERNAME --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          ES_PASSWORD=$(infisical secrets get ELASTICSEARCH__PASSWORD --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          ES_INDEX=$(infisical secrets get ELASTICSEARCH__INDEX_FORMAT --projectId "${{ secrets.INFISICAL_PROJECT_ID_APP }}" --path /coin-automation --env prod --plain --silent)
-          echo "::add-mask::$CORE_API_KEY"
-          echo "::add-mask::$TWO_CAPTCHA_API_KEY"
-          echo "::add-mask::$ES_URI"
-          echo "::add-mask::$ES_PASSWORD"
-          echo "CORE_API_URL=$CORE_API_URL" >> $GITHUB_OUTPUT
-          echo "CORE_API_KEY=$CORE_API_KEY" >> $GITHUB_OUTPUT
-          echo "TWO_CAPTCHA_API_KEY=$TWO_CAPTCHA_API_KEY" >> $GITHUB_OUTPUT
-          echo "ES_URI=$ES_URI" >> $GITHUB_OUTPUT
-          echo "ES_USERNAME=$ES_USERNAME" >> $GITHUB_OUTPUT
-          echo "ES_PASSWORD=$ES_PASSWORD" >> $GITHUB_OUTPUT
-          echo "ES_INDEX=$ES_INDEX" >> $GITHUB_OUTPUT
+          echo "INFISICAL_PROJECT_ID_APP=${{ secrets.INFISICAL_PROJECT_ID_APP }}" >> $GITHUB_OUTPUT
 
       - name: Install and connect Tailscale
         run: |
@@ -97,7 +80,7 @@ jobs:
             git pull origin main
             .venv\Scripts\python.exe -m pip install -r requirements.txt
             nssm stop ${{ env.SERVICE_NAME }} 2>nul
-            nssm set ${{ env.SERVICE_NAME }} AppEnvironmentExtra CORE_API_URL=${{ steps.app.outputs.CORE_API_URL }} CORE_API_KEY=${{ steps.app.outputs.CORE_API_KEY }} TWO_CAPTCHA_API_KEY=${{ steps.app.outputs.TWO_CAPTCHA_API_KEY }} ELASTICSEARCH__URI=${{ steps.app.outputs.ES_URI }} ELASTICSEARCH__USERNAME=${{ steps.app.outputs.ES_USERNAME }} ELASTICSEARCH__PASSWORD=${{ steps.app.outputs.ES_PASSWORD }} ELASTICSEARCH__INDEX_FORMAT=${{ steps.app.outputs.ES_INDEX }}
+            nssm set ${{ env.SERVICE_NAME }} AppEnvironmentExtra PATH=C:\Users\Administrator\AppData\Local\Programs\Python\Python314;C:\Users\Administrator\AppData\Local\Programs\Python\Python314\Scripts;C:\coin\coin-automation\.venv\Scripts;C:\Windows\System32;C:\Windows;C:\coin\coin-automation INFISICAL_CLIENT_ID=${{ secrets.INFISICAL_CLIENT_ID }} INFISICAL_CLIENT_SECRET=${{ secrets.INFISICAL_CLIENT_SECRET }} INFISICAL_PROJECT_ID=${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }} INFISICAL_ENVIRONMENT=prod INFISICAL_SECRET_PATH=/coin-automation
             nssm start ${{ env.SERVICE_NAME }}
             sc query ${{ env.SERVICE_NAME }}
             curl -s http://localhost:8000/health || echo "Health check failed"
