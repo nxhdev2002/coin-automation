@@ -23,7 +23,9 @@ async def load_settings() -> Settings:
         try:
             import httpx
 
-            async with httpx.AsyncClient() as client:
+            logger.info("Fetching secrets from Infisical...")
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 login_resp = await client.post(
                     f"{infisical_base}/api/v1/auth/universal-auth/login",
                     json={"clientId": infisical_client_id, "clientSecret": infisical_client_secret},
@@ -46,6 +48,11 @@ async def load_settings() -> Settings:
                 for item in secrets_resp.json().get("secrets", []):
                     key = item["key"].replace("__", ".")
                     secrets[key] = item["value"]
+
+                logger.info(f"Loaded {len(secrets)} secrets from Infisical:")
+                for key, val in secrets.items():
+                    masked = val[:2] + "***" if val and len(val) > 2 else ("***" if val else "(empty)")
+                    logger.info(f"  {key} = {masked}")
 
                 return Settings(
                     core_api_url=secrets.get("CORE_API_URL", "http://localhost:443"),
