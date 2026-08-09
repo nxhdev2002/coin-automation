@@ -78,22 +78,14 @@ jobs:
             cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}
             git pull origin main
             .venv\Scripts\python.exe -m pip install -r requirements.txt
-            if not exist C:\PsTools\psexec.exe (
-              echo PsTools not installed, downloading...
-              powershell -Command "Invoke-WebRequest -Uri https://download.sysinternals.com/files/PSTools.zip -OutFile C:\PSTools.zip; Expand-Archive -Path C:\PSTools.zip -DestinationPath C:\PsTools -Force; Remove-Item C:\PSTools.zip"
-              reg add "HKLM\Software\Sysinternals\PsExec" /v EulaAccepted /t REG_DWORD /d 1 /f
-            )
-            nssm stop ${{ env.SERVICE_NAME }} 2>nul
-            nssm set ${{ env.SERVICE_NAME }} Application C:\coin\coin-automation\start-nssm.bat
-            nssm set ${{ env.SERVICE_NAME }} AppParameters ""
-            nssm set ${{ env.SERVICE_NAME }} AppDirectory C:\coin\coin-automation
+            powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force"
             setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M
             setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M
             setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
             setx INFISICAL_ENVIRONMENT "prod" /M
             setx INFISICAL_SECRET_PATH "/coin-automation" /M
-            nssm start ${{ env.SERVICE_NAME }}
-            sc query ${{ env.SERVICE_NAME }}
+            powershell -Command "Start-Process -FilePath 'C:\coin\coin-automation\.venv\Scripts\python.exe' -ArgumentList 'C:\coin\coin-automation\run.py' -WorkingDirectory 'C:\coin\coin-automation' -WindowStyle Normal"
+            timeout /t 15 /nobreak >nul
             curl -s http://localhost:8000/health || echo "Health check failed"
 
       - name: Telegram notify
