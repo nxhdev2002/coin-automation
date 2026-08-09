@@ -21,7 +21,8 @@ jobs:
 
       - name: Install Infisical CLI
         run: |
-          curl -1sLf 'https://infisical.com/install/cli.sh' | sudo bash
+          curl -1sLf 'https://artifacts-cli.infisical.com/setup.deb.sh' | sudo -E bash
+          sudo apt-get update && sudo apt-get install -y infisical
           infisical --version
 
       - name: Fetch VPS credentials
@@ -62,12 +63,23 @@ jobs:
           echo "ES_PASSWORD=$ESPASSWORD" >> $GITHUB_OUTPUT
           echo "ES_INDEX=$ES_INDEX" >> $GITHUB_OUTPUT
 
-      - name: Setup SSH
+      - name: Install and connect Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          TAILSCALE_KEY=$(infisical secrets get TAILSCALE_AUTH_KEY --projectId ${{ secrets.INFISICAL_PROJECT_ID_VPS_AUTH }} --path /shared --env prod --plain)
+          if [ -z "$TAILSCALE_KEY" ]; then
+            echo "::error::TAILSCALE_AUTH_KEY is empty"
+            exit 1
+          fi
+          sudo tailscale up --auth-key="$TAILSCALE_KEY"
+
+      - name: Install sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Add host to known_hosts
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -p ${{ steps.vps.outputs.VPS_PORT }} ${{ steps.vps.outputs.VPS_HOST }} >> ~/.ssh/known_hosts
-          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
 
       - name: Deploy to VPS
         uses: appleboy/ssh-action@v1
