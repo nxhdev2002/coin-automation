@@ -80,7 +80,11 @@ jobs:
             git pull origin main
             .venv\Scripts\python.exe -m pip install -r requirements.txt
             nssm stop ${{ env.SERVICE_NAME }} 2>nul
-            nssm set ${{ env.SERVICE_NAME }} AppEnvironmentExtra PATH=C:\Users\Administrator\AppData\Local\Programs\Python\Python314;C:\Users\Administrator\AppData\Local\Programs\Python\Python314\Scripts;C:\coin\coin-automation\.venv\Scripts;C:\Windows\System32;C:\Windows;C:\coin\coin-automation INFISICAL_CLIENT_ID=${{ secrets.INFISICAL_CLIENT_ID }} INFISICAL_CLIENT_SECRET=${{ secrets.INFISICAL_CLIENT_SECRET }} INFISICAL_PROJECT_ID=${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }} INFISICAL_ENVIRONMENT=prod INFISICAL_SECRET_PATH=/coin-automation
+            setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M
+            setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M
+            setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
+            setx INFISICAL_ENVIRONMENT "prod" /M
+            setx INFISICAL_SECRET_PATH "/coin-automation" /M
             nssm start ${{ env.SERVICE_NAME }}
             sc query ${{ env.SERVICE_NAME }}
             curl -s http://localhost:8000/health || echo "Health check failed"
