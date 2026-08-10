@@ -23,7 +23,8 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
     settings = get_settings()
     lock_mgr = get_lock_manager()
 
-    await lock_mgr.acquire(request.tiktok_username)
+    lock_key = f"{request.user_id}_{request.tiktok_username}" if request.user_id else request.tiktok_username
+    await lock_mgr.acquire(lock_key)
     try:
         return await _do_fulfill(request, core_client, settings)
     except Exception as e:
@@ -36,11 +37,12 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
             failure_reason=str(e),
         )
     finally:
-        lock_mgr.release(request.tiktok_username)
+        lock_mgr.release(lock_key)
 
 
 async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
-    profile_path = f"{settings.profile_dir}\\{request.tiktok_username}"
+    profile_key = f"{request.user_id}_{request.tiktok_username}" if request.user_id else request.tiktok_username
+    profile_path = f"{settings.profile_dir}\\{profile_key}"
 
     await core_client.update_order(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",

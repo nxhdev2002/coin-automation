@@ -24,17 +24,17 @@ class CoreClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_tiktok_profile(self, tiktok_username: str) -> dict | None:
-        resp = await self._client.get(f"/internal/coins/tiktok-profile/{tiktok_username}")
+    async def get_tiktok_profile(self, user_id: str, tiktok_username: str) -> dict | None:
+        resp = await self._client.get(f"/internal/coins/tiktok-profile/{user_id}/{tiktok_username}")
         if resp.status_code == 404:
             return None
         resp.raise_for_status()
         return resp.json()
 
-    async def create_tiktok_profile(self, username: str, path: str) -> dict:
+    async def create_tiktok_profile(self, user_id: str, username: str, path: str) -> dict:
         resp = await self._client.post(
             "/internal/coins/tiktok-profile",
-            json={"tiktokUsername": username, "profilePath": path},
+            json={"userId": user_id, "tiktokUsername": username, "profilePath": path},
         )
         resp.raise_for_status()
         return resp.json()
