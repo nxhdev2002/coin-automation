@@ -76,26 +76,31 @@ jobs:
           port: ${{ steps.vps.outputs.VPS_PORT }}
           script: |
             echo [STEP 1] git reset
-            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || { echo ERROR: cd failed; exit 1; }
-            git reset --hard HEAD || { echo ERROR: git reset failed; exit 1; }
+            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1)
+            git reset --hard HEAD || (echo ERROR: git reset failed & exit 1)
             echo [STEP 2] git pull
-            git pull origin main || { echo ERROR: git pull failed; exit 1; }
-            echo [STEP 3] pip install
-            .venv\Scripts\python.exe -m pip install -r requirements.txt || { echo ERROR: pip install failed; exit 1; }
-            echo [STEP 4] kill old process
-            powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force"
-            echo [STEP 5] setx env vars
-            setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M || { echo ERROR: setx CLIENT_ID failed; exit 1; }
-            setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M || { echo ERROR: setx CLIENT_SECRET failed; exit 1; }
-            setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M || { echo ERROR: setx PROJECT_ID failed; exit 1; }
-            setx INFISICAL_ENVIRONMENT "prod" /M || { echo ERROR: setx ENV failed; exit 1; }
-            setx INFISICAL_SECRET_PATH "/coin-automation" /M || { echo ERROR: setx PATH failed; exit 1; }
-            echo [STEP 6] schtasks create
-            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc onlogon /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f || { echo ERROR: schtasks create failed; exit 1; }
-            echo [STEP 7] schtasks run
-            schtasks /run /tn coin-automation || { echo ERROR: schtasks run failed; exit 1; }
-            echo [STEP 8] health check
-            powershell -Command "$ok=$false; for($i=0;$i -lt 12;$i++){Start-Sleep 5; try{$r=Invoke-WebRequest -Uri http://localhost:8000/health -TimeoutSec 3 -UseBasicParsing; if($r.StatusCode -eq 200){$ok=$true; Write-Host HEALTH_OK; break}}catch{}}; if(-not $ok){Write-Error 'Health check failed after 60s'; exit 1}"
+            git pull origin main || (echo ERROR: git pull failed & exit 1)
+            echo [STEP 3] capture deployed commit
+            git rev-parse HEAD > deployed_commit.txt || (echo ERROR: git rev-parse failed & exit 1)
+            echo [STEP 4] drain in-flight orders on the running instance
+            powershell -Command "try { $r = Invoke-RestMethod -Uri http://localhost:8000/drain -Method Post -TimeoutSec 110 -UseBasicParsing; Write-Host ('Drain result: ' + ($r | ConvertTo-Json -Compress)) } catch { Write-Host 'No running instance to drain, continuing' }"
+            echo [STEP 5] kill old process (and its child processes, e.g. browser)
+            powershell -Command "Get-Process python -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('Killing PID ' + $_.Id + ' and its child tree'); taskkill /PID $_.Id /F /T }"
+            echo [STEP 6] pip install
+            .venv\Scripts\python.exe -m pip install -r requirements.txt || (echo ERROR: pip install failed & exit 1)
+            echo [STEP 7] setx env vars
+            setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M || (echo ERROR: setx CLIENT_ID failed & exit 1)
+            setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M || (echo ERROR: setx CLIENT_SECRET failed & exit 1)
+            setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M || (echo ERROR: setx PROJECT_ID failed & exit 1)
+            setx INFISICAL_ENVIRONMENT "prod" /M || (echo ERROR: setx ENV failed & exit 1)
+            setx INFISICAL_SECRET_PATH "/coin-automation" /M || (echo ERROR: setx PATH failed & exit 1)
+            powershell -Command "$sha = (Get-Content deployed_commit.txt -Raw).Trim(); setx GIT_COMMIT $sha /M" || (echo ERROR: setx GIT_COMMIT failed & exit 1)
+            echo [STEP 8] schtasks create
+            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc onlogon /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f || (echo ERROR: schtasks create failed & exit 1)
+            echo [STEP 9] schtasks run
+            schtasks /run /tn coin-automation || (echo ERROR: schtasks run failed & exit 1)
+            echo [STEP 10] health check (must be new commit, not a stale instance still answering)
+            powershell -Command "$expected=(Get-Content deployed_commit.txt -Raw).Trim(); $ok=$false; for($i=0;$i -lt 12;$i++){Start-Sleep 5; try{$r=Invoke-RestMethod -Uri http://localhost:8000/health -TimeoutSec 3 -UseBasicParsing; if($r.status -eq 'ok' -and $r.commit -eq $expected){$ok=$true; Write-Host HEALTH_OK; break} elseif($r.status -eq 'ok'){Write-Host ('Got mismatched commit: ' + $r.commit + ' expected ' + $expected)}}catch{}}; if(-not $ok){Write-Error 'Health check failed: instance running expected commit did not come up within 60s'; exit 1}"
 
       - name: Telegram notify
         if: always()

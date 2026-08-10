@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from loguru import logger
 
 from ..callback.core_client import CoreClient
+from ..concurrency.drain_manager import get_drain_manager
 from ..config import get_settings
 from ..fulfill_processor import process_order
 from ..models.fulfill import FulfillRequest, FulfillResult
@@ -22,6 +23,7 @@ def get_core_client() -> CoreClient:
 
 
 async def _run_fulfillment_background(request: FulfillRequest):
+    drain_mgr = get_drain_manager()
     try:
         result = await process_order(request, get_core_client())
 
@@ -48,11 +50,23 @@ async def _run_fulfillment_background(request: FulfillRequest):
             })
         except Exception:
             pass
+    finally:
+        drain_mgr.end(request.order_id)
 
 
 @router.post("/fulfill", response_model=FulfillResult)
 async def fulfill_order(request: FulfillRequest):
+    drain_mgr = get_drain_manager()
+    if drain_mgr.draining:
+        logger.warning(f"Rejecting order {request.order_id}: service is draining for deploy")
+        return FulfillResult(
+            success=False,
+            failure_category="ServiceDraining",
+            failure_reason="Service is draining for a deploy, retry shortly",
+        )
+
     logger.info(f"Received fulfill request for order {request.order_id}")
+    drain_mgr.begin(request.order_id)
     asyncio.create_task(_run_fulfillment_background(request))
     return FulfillResult(
         success=True,
