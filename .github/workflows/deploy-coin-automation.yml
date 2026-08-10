@@ -75,20 +75,27 @@ jobs:
           password: ${{ steps.vps.outputs.VPS_PASSWORD }}
           port: ${{ steps.vps.outputs.VPS_PORT }}
           script: |
-            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}
-            git reset --hard HEAD
-            git pull origin main
-            .venv\Scripts\python.exe -m pip install -r requirements.txt
+            echo [STEP 1] git reset
+            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || { echo ERROR: cd failed; exit 1; }
+            git reset --hard HEAD || { echo ERROR: git reset failed; exit 1; }
+            echo [STEP 2] git pull
+            git pull origin main || { echo ERROR: git pull failed; exit 1; }
+            echo [STEP 3] pip install
+            .venv\Scripts\python.exe -m pip install -r requirements.txt || { echo ERROR: pip install failed; exit 1; }
+            echo [STEP 4] kill old process
             powershell -Command "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force"
-            setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M
-            setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M
-            setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M
-            setx INFISICAL_ENVIRONMENT "prod" /M
-            setx INFISICAL_SECRET_PATH "/coin-automation" /M
-            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc onlogon /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f
-            schtasks /run /tn coin-automation
-            timeout /t 15 /nobreak >nul
-            curl -s http://localhost:8000/health || echo "Health check failed"
+            echo [STEP 5] setx env vars
+            setx INFISICAL_CLIENT_ID "${{ secrets.INFISICAL_CLIENT_ID }}" /M || { echo ERROR: setx CLIENT_ID failed; exit 1; }
+            setx INFISICAL_CLIENT_SECRET "${{ secrets.INFISICAL_CLIENT_SECRET }}" /M || { echo ERROR: setx CLIENT_SECRET failed; exit 1; }
+            setx INFISICAL_PROJECT_ID "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" /M || { echo ERROR: setx PROJECT_ID failed; exit 1; }
+            setx INFISICAL_ENVIRONMENT "prod" /M || { echo ERROR: setx ENV failed; exit 1; }
+            setx INFISICAL_SECRET_PATH "/coin-automation" /M || { echo ERROR: setx PATH failed; exit 1; }
+            echo [STEP 6] schtasks create
+            schtasks /create /tn coin-automation /tr "C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py" /sc onlogon /ru Administrator /rp "${{ steps.vps.outputs.VPS_PASSWORD }}" /rl highest /it /f || { echo ERROR: schtasks create failed; exit 1; }
+            echo [STEP 7] schtasks run
+            schtasks /run /tn coin-automation || { echo ERROR: schtasks run failed; exit 1; }
+            echo [STEP 8] health check
+            powershell -Command "$ok=$false; for($i=0;$i -lt 12;$i++){Start-Sleep 5; try{$r=Invoke-WebRequest -Uri http://localhost:8000/health -TimeoutSec 3 -UseBasicParsing; if($r.StatusCode -eq 200){$ok=$true; Write-Host HEALTH_OK; break}}catch{}}; if(-not $ok){Write-Error 'Health check failed after 60s'; exit 1}"
 
       - name: Telegram notify
         if: always()
