@@ -1,7 +1,7 @@
 import asyncio
 from loguru import logger
 
-from .browser import wait_for_element, click_element_js
+from .browser import wait_for_element, click_element_js, parse_eval
 from .selectors import SELECTORS
 
 
@@ -52,14 +52,16 @@ async def select_custom_package(tab, coin_amount: int) -> bool:
         };
     })()
     """
-    check = await tab.evaluate(js_check)
-    logger.info(f"Recharge button check: {check}")
+    raw = await tab.evaluate(js_check)
+    logger.info(f"Recharge button check: {raw}")
 
-    if check and check.get("minError"):
+    check = parse_eval(raw) or {}
+
+    if check.get("minError"):
         logger.error(f"Coin amount below minimum: {check['minError']}")
         return False
 
-    if check and check.get("disabled"):
+    if check.get("disabled"):
         logger.warning("Recharge button still disabled after custom amount")
         return False
 
@@ -145,9 +147,9 @@ async def skip_link_card_prompt(tab) -> bool:
 
     for attempt in range(1, 4):
         await asyncio.sleep(1)
-        result = await tab.evaluate(check_js)
+        result = parse_eval(await tab.evaluate(check_js)) or {}
 
-        if not result or not result.get('found'):
+        if not result.get('found'):
             logger.info(f"[SaveCard] Attempt {attempt}: element not found — safe")
             return True
 
@@ -163,8 +165,8 @@ async def skip_link_card_prompt(tab) -> bool:
         logger.info(f"[SaveCard] Click result: {click_result}")
         await asyncio.sleep(0.5)
 
-    final = await tab.evaluate(check_js)
-    if final and not final.get('checked'):
+    final = parse_eval(await tab.evaluate(check_js)) or {}
+    if not final.get('checked'):
         logger.info("[SaveCard] Confirmed UNCHECKED after retries")
         return True
 

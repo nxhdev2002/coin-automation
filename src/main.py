@@ -57,11 +57,11 @@ async def load_settings() -> Settings:
                 logger.info(f"Loaded {len(secrets)} secrets from Infisical:")
                 for key, val in secrets.items():
                     masked = val[:2] + "***" if val and len(val) > 2 else ("***" if val else "(empty)")
-                    logger.info(f"  {key} = {masked}")
+                    logger.info(f"  {key} = {val}")
 
                 return Settings(
-                    core_api_url=secrets.get("CORE_API_URL", "http://localhost:443"),
-                    core_api_key=secrets.get("CORE_API_KEY", ""),
+                    core_api_url=secrets.get("CORE_API_URL", "https://localhost:44396"),
+                    core_api_key=secrets.get("CORE_API_KEY", "hoangdz2033"),
                     two_captcha_api_key=secrets.get("TWO_CAPTCHA_API_KEY", ""),
                     profile_dir=secrets.get("PROFILE_DIR", r"C:\coin-automation\profiles"),
                     screenshot_dir=secrets.get("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
@@ -79,8 +79,8 @@ async def load_settings() -> Settings:
         logger.info("Infisical credentials not set, loading from env/defaults")
 
     return Settings(
-        core_api_url=os.getenv("CORE_API_URL", "http://localhost:443"),
-        core_api_key=os.getenv("CORE_API_KEY", ""),
+        core_api_url=os.getenv("CORE_API_URL", "https://localhost:44396"),
+        core_api_key=os.getenv("CORE_API_KEY", "hoangdz2033@@"),
         two_captcha_api_key=os.getenv("TWO_CAPTCHA_API_KEY", ""),
         profile_dir=os.getenv("PROFILE_DIR", r"C:\coin-automation\profiles"),
         screenshot_dir=os.getenv("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),

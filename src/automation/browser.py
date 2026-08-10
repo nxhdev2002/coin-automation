@@ -84,3 +84,28 @@ async def click_element_js(tab, selector: str) -> bool:
     except Exception:
         return False
 
+
+def parse_eval(raw):
+    """Normalize CDP evaluate result into a Python value."""
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        out = {}
+        for entry in raw:
+            if isinstance(entry, list) and len(entry) == 2:
+                key, val = entry
+                if isinstance(val, dict) and "value" in val:
+                    out[key] = val["value"]
+                elif isinstance(val, dict) and val.get("type") == "null":
+                    out[key] = None
+                elif isinstance(val, dict) and val.get("type") == "undefined":
+                    out[key] = None
+                else:
+                    out[key] = val
+            else:
+                return raw
+        return out
+    if isinstance(raw, dict) and "value" in raw:
+        return raw["value"]
+    return raw
+
