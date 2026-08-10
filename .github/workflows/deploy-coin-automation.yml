@@ -76,13 +76,7 @@ jobs:
           port: ${{ steps.vps.outputs.VPS_PORT }}
           debug: true
           script: |
-            echo [STEP 1] git reset
-            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1)
-            git reset --hard HEAD || (echo ERROR: git reset failed & exit 1)
-            echo [STEP 2] git pull
-            git pull origin main || (echo ERROR: git pull failed & exit 1)
-            echo [STEP 3-10] run remote deploy script
-            powershell -NoProfile -ExecutionPolicy Bypass -File deploy\remote-deploy-step.ps1 -RepoDir "${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}" -InfisicalClientId "${{ secrets.INFISICAL_CLIENT_ID }}" -InfisicalClientSecret "${{ secrets.INFISICAL_CLIENT_SECRET }}" -InfisicalProjectId "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" -VpsPassword "${{ steps.vps.outputs.VPS_PASSWORD }}" || (echo ERROR: remote deploy script failed & exit 1)
+            echo [STEP 1] git reset & cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1) & git reset --hard HEAD || (echo ERROR: git reset failed & exit 1) & echo [STEP 2] git pull & git pull origin main || (echo ERROR: git pull failed & exit 1) & echo [STEP 3-10] run remote deploy script & powershell -NoProfile -ExecutionPolicy Bypass -File deploy\remote-deploy-step.ps1 -RepoDir "${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}" -InfisicalClientId "${{ secrets.INFISICAL_CLIENT_ID }}" -InfisicalClientSecret "${{ secrets.INFISICAL_CLIENT_SECRET }}" -InfisicalProjectId "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" -VpsPassword "${{ steps.vps.outputs.VPS_PASSWORD }}" || (echo ERROR: remote deploy script failed & exit 1)
 
       - name: Telegram notify
         if: always()
