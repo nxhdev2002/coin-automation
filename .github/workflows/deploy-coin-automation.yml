@@ -76,93 +76,13 @@ jobs:
           port: ${{ steps.vps.outputs.VPS_PORT }}
           debug: true
           script: |
-            powershell -NoProfile -ExecutionPolicy Bypass -Command "
-            $ErrorActionPreference = 'Stop'
-            function Check-ExitCode($stepName) {
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Host \"ERROR: $stepName failed with exit code $LASTEXITCODE\"
-                    exit 1
-                }
-            }
-            try {
-                Write-Host '[STEP 1] cd + git reset'
-                Set-Location '${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}'
-                git reset --hard HEAD
-                Check-ExitCode 'git reset'
-
-                Write-Host '[STEP 2] git pull'
-                git pull origin main
-                Check-ExitCode 'git pull'
-
-                Write-Host '[STEP 3] capture deployed commit'
-                $deployedSha = (git rev-parse HEAD)
-                Check-ExitCode 'git rev-parse'
-                Write-Host \"Deployed commit: $deployedSha\"
-
-                Write-Host '[STEP 4] drain in-flight orders on the running instance'
-                try {
-                    $r = Invoke-RestMethod -Uri 'http://localhost:8000/drain' -Method Post -TimeoutSec 110 -UseBasicParsing
-                    Write-Host ('Drain result: ' + ($r | ConvertTo-Json -Compress))
-                } catch {
-                    Write-Host 'No running instance to drain, continuing'
-                }
-
-                Write-Host '[STEP 5] kill old process (and its child processes, e.g. browser)'
-                Get-Process python -ErrorAction SilentlyContinue | ForEach-Object {
-                    Write-Host ('Killing PID ' + $_.Id + ' and its child tree')
-                    taskkill /PID $_.Id /F /T
-                }
-
-                Write-Host '[STEP 6] pip install'
-                & '.venv\Scripts\python.exe' -m pip install -r requirements.txt
-                Check-ExitCode 'pip install'
-
-                Write-Host '[STEP 7] setx env vars'
-                setx INFISICAL_CLIENT_ID '${{ secrets.INFISICAL_CLIENT_ID }}' /M
-                Check-ExitCode 'setx CLIENT_ID'
-                setx INFISICAL_CLIENT_SECRET '${{ secrets.INFISICAL_CLIENT_SECRET }}' /M
-                Check-ExitCode 'setx CLIENT_SECRET'
-                setx INFISICAL_PROJECT_ID '${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}' /M
-                Check-ExitCode 'setx PROJECT_ID'
-                setx INFISICAL_ENVIRONMENT 'prod' /M
-                Check-ExitCode 'setx ENV'
-                setx INFISICAL_SECRET_PATH '/coin-automation' /M
-                Check-ExitCode 'setx SECRET_PATH'
-                setx GIT_COMMIT $deployedSha /M
-                Check-ExitCode 'setx GIT_COMMIT'
-
-                Write-Host '[STEP 8] schtasks create'
-                schtasks /create /tn coin-automation /tr 'C:\coin\coin-automation\.venv\Scripts\python.exe C:\coin\coin-automation\run.py' /sc onlogon /ru Administrator /rp '${{ steps.vps.outputs.VPS_PASSWORD }}' /rl highest /it /f
-                Check-ExitCode 'schtasks create'
-
-                Write-Host '[STEP 9] schtasks run'
-                schtasks /run /tn coin-automation
-                Check-ExitCode 'schtasks run'
-
-                Write-Host '[STEP 10] health check (must be new commit, not a stale instance still answering)'
-                $ok = $false
-                for ($i = 0; $i -lt 12; $i++) {
-                    Start-Sleep -Seconds 5
-                    try {
-                        $health = Invoke-RestMethod -Uri 'http://localhost:8000/health' -TimeoutSec 3 -UseBasicParsing
-                        if ($health.status -eq 'ok' -and $health.commit -eq $deployedSha) {
-                            $ok = $true
-                            Write-Host 'HEALTH_OK'
-                            break
-                        } elseif ($health.status -eq 'ok') {
-                            Write-Host ('Got mismatched commit: ' + $health.commit + ' expected ' + $deployedSha)
-                        }
-                    } catch {}
-                }
-                if (-not $ok) {
-                    Write-Host 'ERROR: health check failed: instance running expected commit did not come up within 60s'
-                    exit 1
-                }
-            } catch {
-                Write-Host \"ERROR: deploy failed: $_\"
-                exit 1
-            }
-            "
+            echo [STEP 1] git reset
+            cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1)
+            git reset --hard HEAD || (echo ERROR: git reset failed & exit 1)
+            echo [STEP 2] git pull
+            git pull origin main || (echo ERROR: git pull failed & exit 1)
+            echo [STEP 3-10] run remote deploy script
+            powershell -NoProfile -ExecutionPolicy Bypass -File deploy\remote-deploy-step.ps1 -RepoDir "${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}" -InfisicalClientId "${{ secrets.INFISICAL_CLIENT_ID }}" -InfisicalClientSecret "${{ secrets.INFISICAL_CLIENT_SECRET }}" -InfisicalProjectId "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" -VpsPassword "${{ steps.vps.outputs.VPS_PASSWORD }}" || (echo ERROR: remote deploy script failed & exit 1)
 
       - name: Telegram notify
         if: always()
