@@ -7,10 +7,17 @@ from io import BytesIO
 from loguru import logger
 import nodriver as uc
 
+from .browser import wait_for_element
 from .selectors import SELECTORS
 
 
-async def check_logged_in(tab) -> bool:
+async def check_logged_in(tab, timeout: float = 6.0, poll_interval: float = 0.4) -> bool:
+    """Poll the page as soon as it loads, instead of a fixed sleep + single check.
+
+    Returns as soon as the login state is determinable (usually well under
+    `timeout`), so an already-authenticated profile doesn't sit through a
+    fixed wait before we notice it's logged in.
+    """
     js = """
     (() => {
         const profile = document.querySelector('[data-e2e="profile-icon"]')
@@ -21,11 +28,19 @@ async def check_logged_in(tab) -> bool:
         return 'unknown';
     })()
     """
-    try:
-        result = await tab.evaluate(js)
-        return result == "logged_in"
-    except Exception:
-        return True
+    elapsed = 0.0
+    while elapsed < timeout:
+        try:
+            result = await tab.evaluate(js)
+        except Exception:
+            return True
+        if result == "logged_in":
+            return True
+        if result == "not_logged_in":
+            return False
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+    return False
 
 
 async def click_qr_login(tab) -> None:
@@ -107,28 +122,33 @@ async def detect_login_success(tab) -> bool:
 
 
 async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5) -> bool:
+    """Run the QR login flow.
+
+    Assumes the caller has already navigated `tab` to the login page and
+    confirmed the account isn't logged in — this function does not
+    re-navigate there, to avoid loading the login page twice.
+    """
     logger.info("Starting QR login flow")
     await callback_client.update_order(order_id, {
         "fulfillmentPhase": "WaitingForQrScan",
     })
 
-    await tab.get(SELECTORS["login_url"])
-    await asyncio.sleep(3)
-
     await click_qr_login(tab)
-    await asyncio.sleep(2)
+    await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=6)
 
     deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
     qr_refreshed_at = datetime.now(timezone.utc)
+    last_qr_sent = None
 
     while datetime.now(timezone.utc) < deadline:
         qr_b64 = await get_qr_element_screenshot(tab)
-        if qr_b64:
+        if qr_b64 and qr_b64 != last_qr_sent:
             qr_expires = datetime.now(timezone.utc) + timedelta(seconds=90)
             await callback_client.update_order(order_id, {
                 "qrCodeBase64": qr_b64,
                 "qrCodeExpiresAt": qr_expires.isoformat(),
             })
+            last_qr_sent = qr_b64
             logger.info("QR code sent to frontend")
 
         if await detect_login_success(tab):
@@ -141,9 +161,9 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         if datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
             logger.info("QR likely expired, refreshing...")
             await tab.get(SELECTORS["login_url"])
-            await asyncio.sleep(2)
             await click_qr_login(tab)
-            await asyncio.sleep(2)
+            await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=6)
+            last_qr_sent = None
             qr_refreshed_at = datetime.now(timezone.utc)
 
         await asyncio.sleep(2)

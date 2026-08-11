@@ -51,8 +51,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
     browser = await launch_browser(profile_path)
 
     try:
-        tab = await browser.get("https://www.tiktok.com/login")
-        await asyncio.sleep(3)
+        tab = await browser.get(SELECTORS["login_url"])
 
         logged_in = await check_logged_in(tab)
         if not logged_in:
