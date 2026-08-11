@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,8 @@ import nodriver as uc
 
 from .browser import wait_for_element, click_element_js
 from .selectors import SELECTORS
+
+REQUIRED_CARD_FIELDS = {"card_number", "cvv", "holder_name", "expiry"}
 
 
 async def _find_pipopay_session(browser):
@@ -23,15 +26,62 @@ async def _find_pipopay_session(browser):
     return str(session_id)
 
 
+async def _pipopay_card_input_ready(browser, session_id) -> bool:
+    """Check whether the card number input has rendered inside the pipopay session."""
+    result = await browser.send(uc.cdp.runtime.evaluate(
+        expression="""
+        (() => {
+            const inputs = document.querySelectorAll('input');
+            for (const inp of inputs) {
+                const name = (inp.name || '').toLowerCase();
+                const ph = (inp.placeholder || '').toLowerCase();
+                if (name.includes('card_number') || ph.includes('card number')) return true;
+            }
+            return false;
+        })()
+        """,
+        return_by_value=True,
+    ), sessionId=session_id)
+    remote_obj, _ = result
+    return bool(remote_obj.value) if remote_obj else False
+
+
+async def _wait_for_pipopay_ready(browser, timeout_seconds: float = 15, poll_interval: float = 0.5):
+    """Poll until the pipopay target exists AND its card_number input has actually rendered.
+
+    The outer <iframe> element can report a non-zero bounding box before the
+    cross-origin pipopay document has finished loading, so a one-shot lookup
+    here is racy and intermittently fails to find anything to fill.
+    """
+    elapsed = 0.0
+    while elapsed < timeout_seconds:
+        session_id = await _find_pipopay_session(browser)
+        if session_id:
+            try:
+                if await _pipopay_card_input_ready(browser, session_id):
+                    return session_id
+            except Exception:
+                pass
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+    return None
+
+
 async def fill_card_form(browser, tab, card_number: str, card_cvv: str,
                           card_expiry: str, card_holder: str) -> bool:
     """Fill the card form inside the pipopay iframe using CDP Target API."""
-    session_id = await _find_pipopay_session(browser)
+    session_id = await _wait_for_pipopay_ready(browser)
     if not session_id:
-        logger.warning("Pipopay iframe target not found")
+        logger.warning("Pipopay iframe target/card inputs not found")
         return False
     logger.info(f"Pipopay session attached: {session_id}")
 
+    values_json = json.dumps({
+        "card_number": card_number,
+        "cvv": card_cvv,
+        "holder_name": card_holder,
+        "expiry": card_expiry,
+    })
     js_fill = f"""
     (() => {{
         const setVal = (el, val) => {{
@@ -43,22 +93,23 @@ async def fill_card_form(browser, tab, card_number: str, card_cvv: str,
             el.dispatchEvent(new Event('change', {{bubbles: true}}));
             el.dispatchEvent(new Event('blur', {{bubbles: true}}));
         }};
+        const values = {values_json};
         const inputs = document.querySelectorAll('input');
         let filled = [];
         for (const inp of inputs) {{
             const name = (inp.name || '').toLowerCase();
             const ph = (inp.placeholder || '').toLowerCase();
             if (name.includes('card_number') || ph.includes('card number')) {{
-                setVal(inp, '{card_number}');
+                setVal(inp, values.card_number);
                 filled.push('card_number');
             }} else if (name.includes('cvv') || ph.includes('cvv') || ph.includes('cvc')) {{
-                setVal(inp, '{card_cvv}');
+                setVal(inp, values.cvv);
                 filled.push('cvv');
             }} else if (name.includes('holder') || ph.includes('cardholder')) {{
-                setVal(inp, '{card_holder}');
+                setVal(inp, values.holder_name);
                 filled.push('holder_name');
             }} else if (name.includes('expiration') || ph.includes('mm/yy')) {{
-                setVal(inp, '{card_expiry}');
+                setVal(inp, values.expiry);
                 filled.push('expiry');
             }}
         }}
@@ -72,7 +123,14 @@ async def fill_card_form(browser, tab, card_number: str, card_cvv: str,
     remote_obj, _ = result
     value = remote_obj.value if remote_obj else None
     logger.info(f"Card form fill result: {value}")
-    return "filled:" in str(value) and "card_number" in str(value)
+
+    prefix = "filled: "
+    filled_fields = set(str(value)[len(prefix):].split(",")) if str(value).startswith(prefix) else set()
+    missing = REQUIRED_CARD_FIELDS - filled_fields
+    if missing:
+        logger.warning(f"Card form incomplete — missing fields: {sorted(missing)}")
+        return False
+    return True
 
 
 async def click_pay_now(tab) -> bool:
