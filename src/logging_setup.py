@@ -22,6 +22,8 @@ def setup_logging(log_dir: str, es_uri: str = "", es_username: str = "",
     if es_uri:
         try:
             from elasticsearch import Elasticsearch
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
             class ElasticSearchSink:
                 def __init__(self, es_uri, username, password, index_format):
