@@ -26,7 +26,7 @@ class CoreClient:
 
     async def get_tiktok_profile(self, user_id: str, tiktok_username: str) -> dict | None:
         resp = await self._client.get(f"/internal/coins/tiktok-profile/{user_id}/{tiktok_username}")
-        if resp.status_code == 404:
+        if resp.status_code in (404, 204):
             return None
         resp.raise_for_status()
         return resp.json()

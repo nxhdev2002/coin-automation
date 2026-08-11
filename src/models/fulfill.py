@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class FulfillRequest(BaseModel):
     order_id: str
     user_id: str = ""
+    user_name: str = ""
     tiktok_username: str
     coin_amount: int
     card_id: str = ""
