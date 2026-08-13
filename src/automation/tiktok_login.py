@@ -7,7 +7,7 @@ from io import BytesIO
 from loguru import logger
 import nodriver as uc
 
-from .browser import wait_for_element
+from .browser import wait_for_element, human_sleep
 from .selectors import SELECTORS
 
 
@@ -111,7 +111,7 @@ async def detect_login_success(tab) -> bool:
     try:
         result = await tab.evaluate(js)
         if result in ("logged_in", "url_changed", "qr_gone"):
-            await asyncio.sleep(2)
+            await human_sleep(1, 3)
             result2 = await tab.evaluate(js)
             logger.info(f"Login check: {result} -> {result2}")
             return result2 in ("logged_in", "url_changed")

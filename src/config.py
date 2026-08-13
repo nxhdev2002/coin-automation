@@ -8,6 +8,10 @@ class Settings(BaseModel):
     profile_dir: str = r"C:\coin-automation\profiles"
     screenshot_dir: str = r"C:\coin-automation\screenshots"
     log_dir: str = r"C:\coin-automation\logs"
+    state_dir: str = r"C:\coin-automation\state"
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    ip_check_interval_minutes: int = 5
     max_concurrent_browsers: int = 3
     qr_timeout_minutes: int = 5
     captcha_max_retries: int = 3

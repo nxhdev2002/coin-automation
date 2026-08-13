@@ -10,7 +10,9 @@ from .config import Settings, set_settings, get_settings
 from .logging_setup import setup_logging
 from .api.fulfill import router as fulfill_router
 from .api.health import router as health_router
+from .api.ip_monitor import router as ip_router
 from .api.profile import router as profile_router
+from .monitor.ip_watcher import get_ip_watcher
 from .profile.spawn import get_spawn_manager
 
 
@@ -68,6 +70,10 @@ async def load_settings() -> Settings:
                     profile_dir=secrets.get("PROFILE_DIR", r"C:\coin-automation\profiles"),
                     screenshot_dir=secrets.get("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
                     log_dir=secrets.get("LOG_DIR", r"C:\coin-automation\logs"),
+                    state_dir=secrets.get("STATE_DIR", r"C:\coin-automation\state"),
+                    telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),
+                    telegram_chat_id=secrets.get("TELEGRAM_CHAT_ID", ""),
+                    ip_check_interval_minutes=int(secrets.get("IP_CHECK_INTERVAL_MINUTES", "5")),
                     max_concurrent_browsers=int(secrets.get("MAX_CONCURRENT_BROWSERS", "3")),
                     qr_timeout_minutes=int(secrets.get("QR_TIMEOUT_MINUTES", "5")),
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
@@ -88,7 +94,11 @@ async def load_settings() -> Settings:
         profile_dir=os.getenv("PROFILE_DIR", r"C:\coin-automation\profiles"),
         screenshot_dir=os.getenv("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),
+        state_dir=os.getenv("STATE_DIR", r"C:\coin-automation\state"),
         spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
+        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
+        ip_check_interval_minutes=int(os.getenv("IP_CHECK_INTERVAL_MINUTES", "5")),
     )
 
 
@@ -101,6 +111,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.profile_dir, exist_ok=True)
     os.makedirs(settings.screenshot_dir, exist_ok=True)
     os.makedirs(settings.log_dir, exist_ok=True)
+    os.makedirs(settings.state_dir, exist_ok=True)
 
     setup_logging(
         settings.log_dir,
@@ -110,9 +121,13 @@ async def lifespan(app: FastAPI):
         settings.es_index_format,
     )
 
+    get_ip_watcher().start()
+
     logger.info(f"Coin Automation Service started — API: {settings.core_api_url}")
 
     yield
+
+    await get_ip_watcher().stop()
 
     closed = await get_spawn_manager().close_all()
     if closed:
@@ -122,6 +137,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Coin Automation Service", lifespan=lifespan)
+
+
+@app.get("/")
+async def root():
+    return {"status": "ok"}
+
+
 app.include_router(fulfill_router)
 app.include_router(health_router)
 app.include_router(profile_router)
+app.include_router(ip_router)

@@ -1,7 +1,7 @@
 import asyncio
 from loguru import logger
 
-from .browser import wait_for_element, click_element_js, parse_eval
+from .browser import wait_for_element, click_element_js, parse_eval, human_sleep
 from .selectors import SELECTORS
 
 
@@ -17,7 +17,7 @@ async def select_custom_package(tab, coin_amount: int) -> bool:
         logger.warning("Could not click Custom package option")
         return False
 
-    await asyncio.sleep(1)
+    await human_sleep(1, 3)
 
     js_fill = f"""
     (() => {{
@@ -37,7 +37,7 @@ async def select_custom_package(tab, coin_amount: int) -> bool:
     if "input not found" in str(result):
         return False
 
-    await asyncio.sleep(2)
+    await human_sleep(2, 4)
 
     js_check = """
     (() => {
@@ -86,7 +86,7 @@ async def click_recharge(tab) -> bool:
         return False
 
     ok = await click_element_js(tab, selector)
-    await asyncio.sleep(4)
+    await human_sleep(3, 5)
     logger.info(f"Recharge button clicked: {ok}")
     return ok
 
@@ -110,21 +110,47 @@ async def select_add_card(tab) -> bool:
     """
     result = await tab.evaluate(js)
     logger.info(f"Add card selection: {result}")
-    await asyncio.sleep(3)
+    await human_sleep(2, 4)
     return bool(result)
 
 
 async def skip_link_card_prompt(tab) -> bool:
     """
-    Ensure the 'Link this card for faster checkout' toggle (data-e2e='payment-method-save-button')
-    is UNCHECKED. This prevents the system card from being saved to the customer's TikTok account.
-    Triple-checks to guarantee safety.
+    Ensure the 'Link this card for faster checkout' toggle is UNCHECKED — but only
+    when the selected payment method is CC/DC (data-e2e='payment-method-item-ccdc').
+
+    STRICT: if anything cannot be confirmed, return False (fail order).
+    Never proceed unless we are 100% sure the toggle is unchecked.
     """
+    ccdc_selector = '[data-e2e="payment-method-item-ccdc"]'
+
+    if not await wait_for_element(tab, ccdc_selector, timeout=5):
+        logger.error("[SaveCard] CC/DC payment method not found — FAIL")
+        return False
+
+    ccdc_active_js = """
+    (() => {
+        const el = document.querySelector('[data-e2e="payment-method-item-ccdc"]');
+        if (!el) return false;
+        const radio = el.querySelector('input[type="radio"]');
+        return radio ? radio.checked : false;
+    })()
+    """
+    try:
+        ccdc_active = await tab.evaluate(ccdc_active_js)
+    except Exception as e:
+        logger.error(f"[SaveCard] Failed to check CC/DC active state: {e} — FAIL")
+        return False
+
+    if not ccdc_active:
+        logger.error("[SaveCard] CC/DC not the selected payment method — FAIL")
+        return False
+
     selector = '[data-e2e="payment-method-save-button"]'
 
     if not await wait_for_element(tab, selector, timeout=5):
-        logger.info("[SaveCard] Toggle not found — no save-card option on this page")
-        return True
+        logger.error("[SaveCard] Save card toggle not found — FAIL")
+        return False
 
     check_js = """
     (() => {
@@ -146,26 +172,51 @@ async def skip_link_card_prompt(tab) -> bool:
     """
 
     for attempt in range(1, 4):
-        await asyncio.sleep(1)
-        result = parse_eval(await tab.evaluate(check_js)) or {}
+        await human_sleep(1, 3)
+        try:
+            result = parse_eval(await tab.evaluate(check_js)) or {}
+        except Exception as e:
+            logger.error(f"[SaveCard] Attempt {attempt}: evaluate failed: {e} — FAIL")
+            return False
 
         if not result.get('found'):
-            logger.info(f"[SaveCard] Attempt {attempt}: element not found — safe")
-            return True
+            logger.error(f"[SaveCard] Attempt {attempt}: element not found — FAIL")
+            return False
 
         checked = result.get('checked')
         logger.info(f"[SaveCard] Attempt {attempt}: checked={checked}")
+
+        if checked is None:
+            logger.error(f"[SaveCard] Attempt {attempt}: cannot determine checked state — FAIL")
+            return False
 
         if not checked:
             logger.info(f"[SaveCard] Confirmed UNCHECKED on attempt {attempt}")
             return True
 
         logger.warning(f"[SaveCard] Toggle is CHECKED on attempt {attempt} — clicking to uncheck...")
-        click_result = await tab.evaluate(uncheck_js)
+        try:
+            click_result = await tab.evaluate(uncheck_js)
+        except Exception as e:
+            logger.error(f"[SaveCard] Attempt {attempt}: uncheck click failed: {e} — FAIL")
+            return False
         logger.info(f"[SaveCard] Click result: {click_result}")
-        await asyncio.sleep(0.5)
+        await human_sleep(1, 2)
 
-    final = parse_eval(await tab.evaluate(check_js)) or {}
+    try:
+        final = parse_eval(await tab.evaluate(check_js)) or {}
+    except Exception as e:
+        logger.error(f"[SaveCard] Final check evaluate failed: {e} — FAIL")
+        return False
+
+    if not final.get('found'):
+        logger.error("[SaveCard] Final check: element not found — FAIL")
+        return False
+
+    if final.get('checked') is None:
+        logger.error("[SaveCard] Final check: cannot determine checked state — FAIL")
+        return False
+
     if not final.get('checked'):
         logger.info("[SaveCard] Confirmed UNCHECKED after retries")
         return True

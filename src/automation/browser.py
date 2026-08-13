@@ -1,8 +1,15 @@
 import asyncio
 import os
+import random
 import sys
 import nodriver as uc
 from loguru import logger
+
+
+async def human_sleep(min_s: float = 1.0, max_s: float = 5.0):
+    """Random sleep to mimic human behavior and avoid anti-bot detection."""
+    delay = random.uniform(min_s, max_s)
+    await asyncio.sleep(delay)
 
 
 async def launch_browser(profile_path: str, headless: bool = False):

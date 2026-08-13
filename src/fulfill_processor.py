@@ -2,7 +2,7 @@ import asyncio
 
 from loguru import logger
 
-from .automation.browser import launch_browser, wait_for_element
+from .automation.browser import launch_browser, wait_for_element, human_sleep
 from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
     select_custom_package, click_recharge, select_add_card,
@@ -87,7 +87,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         })
 
         tab = await browser.get(SELECTORS["recharge_url"])
-        await asyncio.sleep(4)
+        await human_sleep(3, 5)
 
         selected = await select_custom_package(tab, request.coin_amount)
         if not selected:
@@ -159,7 +159,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 screenshot_path=screenshot,
             )
 
-        await asyncio.sleep(1)
+        await human_sleep(1, 3)
 
         paid = await click_pay_now(tab)
         if not paid:
@@ -171,7 +171,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 screenshot_path=screenshot,
             )
 
-        result = await wait_for_payment_result(browser, tab, timeout_seconds=30)
+        result = await wait_for_payment_result(browser, tab, timeout_seconds=60)
         screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
 
         if result.get("payment_status") == "success":

@@ -7,7 +7,7 @@ from pathlib import Path
 from loguru import logger
 import nodriver as uc
 
-from .browser import wait_for_element, click_element_js
+from .browser import wait_for_element, click_element_js, human_sleep
 from .selectors import SELECTORS
 
 REQUIRED_CARD_FIELDS = {"card_number", "cvv", "holder_name", "expiry"}
@@ -124,6 +124,8 @@ async def fill_card_form(browser, tab, card_number: str, card_cvv: str,
     value = remote_obj.value if remote_obj else None
     logger.info(f"Card form fill result: {value}")
 
+    await human_sleep(1, 3)
+
     prefix = "filled: "
     filled_fields = set(str(value)[len(prefix):].split(",")) if str(value).startswith(prefix) else set()
     missing = REQUIRED_CARD_FIELDS - filled_fields
@@ -154,7 +156,7 @@ async def click_pay_now(tab) -> bool:
     return ok
 
 
-async def wait_for_payment_result(browser, tab, timeout_seconds: int = 30) -> dict:
+async def wait_for_payment_result(browser, tab, timeout_seconds: int = 60) -> dict:
     """Wait for payment result. Check URL redirect + error messages in pipopay iframe + main page."""
     logger.info(f"Waiting for payment result (timeout {timeout_seconds}s)")
     start = time.time()

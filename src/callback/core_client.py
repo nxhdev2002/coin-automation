@@ -1,6 +1,8 @@
 import httpx
 from loguru import logger
 
+from ..logging_context import set_order_status
+
 
 class CoreClient:
     def __init__(self, base_url: str, api_key: str):
@@ -12,6 +14,9 @@ class CoreClient:
         )
 
     async def update_order(self, order_id: str, data: dict) -> None:
+        # Every phase transition already flows through here, so this is the one
+        # place that has to keep the order status on the logs up to date.
+        set_order_status(data.get("fulfillmentPhase", ""))
         try:
             resp = await self._client.post(f"/internal/coins/{order_id}/update", json=data)
             resp.raise_for_status()
