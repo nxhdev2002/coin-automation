@@ -14,6 +14,8 @@ class Settings(BaseModel):
     ip_check_interval_minutes: int = 5
     max_concurrent_browsers: int = 3
     qr_timeout_minutes: int = 5
+    # hard ceiling for one whole fulfillment; <= 0 disables
+    order_timeout_minutes: float = 15
     captcha_max_retries: int = 3
     spawn_ttl_minutes: int = 30
     es_uri: str = ""

@@ -10,7 +10,7 @@ from .automation.tiktok_recharge import (
 )
 from .automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
-    take_screenshot, parse_end_result_url, is_payment_success,
+    take_screenshot, is_payment_success,
 )
 from .automation.selectors import SELECTORS
 from .callback.core_client import CoreClient
@@ -27,7 +27,21 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
     lock_key = profile_name(request.user_name, request.tiktok_username)
     await lock_mgr.acquire(lock_key)
     try:
+        # Hard ceiling for the whole order: every step has its own timeout, but
+        # a hung CDP call would otherwise block forever — holding this profile's
+        # lock and queueing every later order for the same account.
+        timeout_s = settings.order_timeout_minutes * 60
+        if timeout_s > 0:
+            async with asyncio.timeout(timeout_s):
+                return await _do_fulfill(request, core_client, settings)
         return await _do_fulfill(request, core_client, settings)
+    except TimeoutError:
+        logger.error(f"Order {request.order_id} exceeded {settings.order_timeout_minutes} min, aborted")
+        return FulfillResult(
+            success=False,
+            failure_category="OrderTimeout",
+            failure_reason=f"Fulfillment exceeded {settings.order_timeout_minutes} minutes and was aborted",
+        )
     except Exception as e:
         import traceback
         logger.error(f"Fulfillment error: {e}")

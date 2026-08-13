@@ -40,6 +40,8 @@ async def _fulfill_and_report(request: FulfillRequest):
     drain_mgr = get_drain_manager()
     try:
         result = await process_order(request, get_core_client())
+        if result.success:
+            drain_mgr.mark_fulfilled(request.order_id)
 
         logger.info(
             f"Order {request.order_id} finished: success={result.success} "
@@ -91,6 +93,25 @@ async def fulfill_order(request: FulfillRequest):
                 success=False,
                 failure_category="ServiceDraining",
                 failure_reason="Service is draining for a deploy, retry shortly",
+            )
+
+        # A resend of an order that is still running (or already bought its
+        # coins) must never start a second purchase.
+        if drain_mgr.is_active(request.order_id):
+            set_order_status("Rejected")
+            logger.warning(f"Rejecting order {request.order_id}: already in progress")
+            return FulfillResult(
+                success=False,
+                failure_category="DuplicateOrder",
+                failure_reason="Order is already being fulfilled",
+            )
+        if drain_mgr.was_fulfilled(request.order_id):
+            set_order_status("Rejected")
+            logger.warning(f"Rejecting order {request.order_id}: already fulfilled successfully")
+            return FulfillResult(
+                success=False,
+                failure_category="DuplicateOrder",
+                failure_reason="Order was already fulfilled successfully",
             )
 
         logger.info(f"Received fulfill request for order {request.order_id}")

@@ -1,12 +1,20 @@
 import asyncio
+from collections import OrderedDict
+
+FULFILLED_MEMORY_SIZE = 500
 
 
 class DrainManager:
-    """Tracks in-flight /fulfill orders so a deploy can wait for them before killing the process."""
+    """Tracks in-flight /fulfill orders so a deploy can wait for them before
+    killing the process, and guards against the same order being run twice."""
 
     def __init__(self):
         self._active: set[str] = set()
         self._draining = False
+        # order_ids that finished successfully — a retry of one of these would
+        # buy the coins a second time. Bounded; failed orders are NOT recorded,
+        # so the core can legitimately retry them.
+        self._fulfilled: OrderedDict[str, None] = OrderedDict()
 
     @property
     def draining(self) -> bool:
@@ -17,6 +25,17 @@ class DrainManager:
 
     def end(self, order_id: str) -> None:
         self._active.discard(order_id)
+
+    def is_active(self, order_id: str) -> bool:
+        return order_id in self._active
+
+    def mark_fulfilled(self, order_id: str) -> None:
+        self._fulfilled[order_id] = None
+        while len(self._fulfilled) > FULFILLED_MEMORY_SIZE:
+            self._fulfilled.popitem(last=False)
+
+    def was_fulfilled(self, order_id: str) -> bool:
+        return order_id in self._fulfilled
 
     def start_draining(self) -> None:
         self._draining = True

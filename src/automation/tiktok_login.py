@@ -1,11 +1,7 @@
 import asyncio
-import base64
-import time
 from datetime import datetime, timedelta, timezone
-from io import BytesIO
 
 from loguru import logger
-import nodriver as uc
 
 from .browser import wait_for_element, human_sleep
 from .selectors import SELECTORS
@@ -32,8 +28,12 @@ async def check_logged_in(tab, timeout: float = 6.0, poll_interval: float = 0.4)
     while elapsed < timeout:
         try:
             result = await tab.evaluate(js)
-        except Exception:
-            return True
+        except Exception as e:
+            # A broken page must not pass for a logged-in one — keep polling and
+            # let the timeout fall through to False (the QR flow re-detects an
+            # actually-logged-in session via detect_login_success).
+            logger.warning(f"check_logged_in evaluate failed: {type(e).__name__}: {e}")
+            result = "unknown"
         if result == "logged_in":
             return True
         if result == "not_logged_in":
@@ -58,21 +58,6 @@ async def click_qr_login(tab) -> None:
     """
     result = await tab.evaluate(js)
     logger.info(f"QR login click result: {result}")
-
-
-async def get_qr_code_base64(tab) -> str | None:
-    try:
-        qr_el = await tab.find(SELECTORS["qr_code_container"], timeout=5)
-        if not qr_el:
-            return None
-        screenshot = await tab.save_screenshot()
-        if isinstance(screenshot, str):
-            with open(screenshot, "rb") as f:
-                return base64.b64encode(f.read()).decode()
-        return None
-    except Exception as e:
-        logger.warning(f"QR capture failed: {e}")
-        return None
 
 
 async def get_qr_element_screenshot(tab) -> str | None:
