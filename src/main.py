@@ -10,6 +10,8 @@ from .config import Settings, set_settings, get_settings
 from .logging_setup import setup_logging
 from .api.fulfill import router as fulfill_router
 from .api.health import router as health_router
+from .api.profile import router as profile_router
+from .profile.spawn import get_spawn_manager
 
 
 async def load_settings() -> Settings:
@@ -69,6 +71,7 @@ async def load_settings() -> Settings:
                     max_concurrent_browsers=int(secrets.get("MAX_CONCURRENT_BROWSERS", "3")),
                     qr_timeout_minutes=int(secrets.get("QR_TIMEOUT_MINUTES", "5")),
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
+                    spawn_ttl_minutes=int(secrets.get("SPAWN_TTL_MINUTES", "30")),
                     es_uri=secrets.get("ELASTICSEARCH.URI", ""),
                     es_username=secrets.get("ELASTICSEARCH.USERNAME", ""),
                     es_password=secrets.get("ELASTICSEARCH.PASSWORD", ""),
@@ -85,6 +88,7 @@ async def load_settings() -> Settings:
         profile_dir=os.getenv("PROFILE_DIR", r"C:\coin-automation\profiles"),
         screenshot_dir=os.getenv("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),
+        spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
     )
 
 
@@ -110,9 +114,14 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    closed = await get_spawn_manager().close_all()
+    if closed:
+        logger.info(f"Closed {closed} spawned profile browser(s) on shutdown")
+
     logger.info("Coin Automation Service shutting down")
 
 
 app = FastAPI(title="Coin Automation Service", lifespan=lifespan)
 app.include_router(fulfill_router)
 app.include_router(health_router)
+app.include_router(profile_router)

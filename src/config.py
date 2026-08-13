@@ -11,6 +11,7 @@ class Settings(BaseModel):
     max_concurrent_browsers: int = 3
     qr_timeout_minutes: int = 5
     captcha_max_retries: int = 3
+    spawn_ttl_minutes: int = 30
     es_uri: str = ""
     es_username: str = ""
     es_password: str = ""

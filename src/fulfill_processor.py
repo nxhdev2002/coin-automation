@@ -17,13 +17,14 @@ from .callback.core_client import CoreClient
 from .config import get_settings
 from .concurrency.lock_manager import get_lock_manager
 from .models.fulfill import FulfillRequest, FulfillResult
+from .profile.paths import profile_name, profile_path
 
 
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
     settings = get_settings()
     lock_mgr = get_lock_manager()
 
-    lock_key = f"{request.user_name}-{request.tiktok_username}" if request.user_name else request.tiktok_username    
+    lock_key = profile_name(request.user_name, request.tiktok_username)
     await lock_mgr.acquire(lock_key)
     try:
         return await _do_fulfill(request, core_client, settings)
@@ -40,26 +41,29 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
         lock_mgr.release(lock_key)
 
 
-async def _save_profile(core_client: CoreClient, request: FulfillRequest, profile_path: str):
+async def _save_profile(core_client: CoreClient, request: FulfillRequest, path: str):
     try:
         existing = await core_client.get_tiktok_profile(request.user_id, request.tiktok_username)
         if existing:
             logger.info(f"Profile already exists for {request.user_name}-{request.tiktok_username}")
             return
-        await core_client.create_tiktok_profile(request.user_id, request.tiktok_username, profile_path)
+        await core_client.create_tiktok_profile(request.user_id, request.tiktok_username, path)
         logger.info(f"Profile created for {request.user_name}-{request.tiktok_username}")
     except Exception as e:
         logger.warning(f"Failed to save profile: {e}")
 
 
 async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
-    profile_path = f"{settings.profile_dir}\\{request.user_name}-{request.tiktok_username}" if request.user_name else f"{settings.profile_dir}\\{request.tiktok_username}"
+    profile = profile_path(
+        settings.profile_dir,
+        profile_name(request.user_name, request.tiktok_username),
+    )
 
     await core_client.update_order(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",
     })
 
-    browser = await launch_browser(profile_path)
+    browser = await launch_browser(profile)
 
     try:
         tab = await browser.get(SELECTORS["login_url"])
@@ -76,7 +80,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                     screenshot_path=screenshot,
                 )
 
-        await _save_profile(core_client, request, profile_path)
+        await _save_profile(core_client, request, profile)
 
         await core_client.update_order(request.order_id, {
             "fulfillmentPhase": "PurchasingCoins",
