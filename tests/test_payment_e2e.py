@@ -7,7 +7,7 @@ import pytest
 from src.automation.browser import launch_browser
 from src.automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
-    parse_end_result_url,
+    parse_end_result_url, is_payment_success,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -75,6 +75,29 @@ async def test_parse_end_result_url_success():
     assert result["order_id"] == "abc"
     assert result["charge_id"] == "ch_123"
     assert result["pay_method"] == "card"
+
+
+async def test_succeed_is_a_success():
+    """TikTok really returns payment_status=succeed — a charged card must not be
+    reported as a failed order (observed on order 3a230dd4 on 2026-08-13)."""
+    url = "https://www.tiktok.com/coin/end-result?payment_status=succeed&error_code=&message=&order_id=abc&charge_id=ch_1&pay_method=card&is_redirect=0"
+    result = parse_end_result_url(url)
+    assert result["payment_status"] == "succeed"
+    assert is_payment_success(result) is True
+
+
+async def test_success_spellings_and_case():
+    assert is_payment_success({"payment_status": "success"}) is True
+    assert is_payment_success({"payment_status": "Succeed"}) is True
+    assert is_payment_success({"payment_status": " succeeded "}) is True
+
+
+async def test_non_success_statuses():
+    assert is_payment_success({"payment_status": "failed"}) is False
+    assert is_payment_success({"payment_status": "timeout", "error_code": "TIMEOUT"}) is False
+    assert is_payment_success({"payment_status": "processing"}) is False
+    assert is_payment_success({"payment_status": "unknown"}) is False
+    assert is_payment_success({}) is False
 
 
 async def test_parse_end_result_url_failed():

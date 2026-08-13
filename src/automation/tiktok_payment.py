@@ -156,6 +156,16 @@ async def click_pay_now(tab) -> bool:
     return ok
 
 
+# TikTok's cashier reports a completed charge as `payment_status=succeed` on the
+# end-result URL — not "success". Accept every spelling seen so a card that was
+# actually charged is never recorded as a failed order.
+PAYMENT_SUCCESS_STATUSES = frozenset({"success", "succeed", "succeeded"})
+
+
+def is_payment_success(result: dict) -> bool:
+    return str(result.get("payment_status", "")).strip().lower() in PAYMENT_SUCCESS_STATUSES
+
+
 async def wait_for_payment_result(browser, tab, timeout_seconds: int = 60) -> dict:
     """Wait for payment result. Check URL redirect + error messages in pipopay iframe + main page."""
     logger.info(f"Waiting for payment result (timeout {timeout_seconds}s)")
@@ -167,8 +177,9 @@ async def wait_for_payment_result(browser, tab, timeout_seconds: int = 60) -> di
         # 1. Check URL redirect to /coin/end-result
         url = await tab.evaluate("location.href")
         if isinstance(url, str) and "/coin/end-result" in url:
-            logger.info("Payment result URL detected")
-            return parse_end_result_url(url)
+            parsed = parse_end_result_url(url)
+            logger.info(f"Payment result URL detected: {parsed}")
+            return parsed
 
         # 2. Check for error messages on the main page (cashier modal)
         main_error = await tab.evaluate("""

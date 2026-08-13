@@ -10,7 +10,7 @@ from .automation.tiktok_recharge import (
 )
 from .automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
-    take_screenshot, parse_end_result_url,
+    take_screenshot, parse_end_result_url, is_payment_success,
 )
 from .automation.selectors import SELECTORS
 from .callback.core_client import CoreClient
@@ -174,7 +174,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         result = await wait_for_payment_result(browser, tab, timeout_seconds=60)
         screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
 
-        if result.get("payment_status") == "success":
+        if is_payment_success(result):
             logger.info(f"Payment SUCCESS for order {request.order_id}")
             return FulfillResult(
                 success=True,
