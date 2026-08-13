@@ -191,7 +191,11 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 reason = f"Payment rejected: {error_code} - {result.get('message', '')}"
             else:
                 category = "PaymentFailed"
+                detail = result.get("message", "")
                 reason = f"Payment failed: {error_code or result.get('payment_status', 'unknown')}"
+                if detail:
+                    # e.g. CARD_ERROR alone says nothing — keep the on-screen message
+                    reason += f" - {detail}"
 
             logger.warning(f"Payment FAILED for order {request.order_id}: {reason}")
             return FulfillResult(

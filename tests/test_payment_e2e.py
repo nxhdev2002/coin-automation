@@ -7,7 +7,8 @@ import pytest
 from src.automation.browser import launch_browser
 from src.automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
-    parse_end_result_url, is_payment_success,
+    parse_end_result_url, is_payment_success, error_scan_js,
+    PAYMENT_ERROR_KEYWORDS, STRUCTURAL_ERROR_SCAN_JS,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -98,6 +99,37 @@ async def test_non_success_statuses():
     assert is_payment_success({"payment_status": "processing"}) is False
     assert is_payment_success({"payment_status": "unknown"}) is False
     assert is_payment_success({}) is False
+
+
+async def test_error_scan_covers_vietnamese():
+    """Cashier renders in the account's language — VN error wording must be in the scan
+    (verified against the live vi-VN cashier via devtools on 2026-08-13)."""
+    for kw in ("không hợp lệ", "bị từ chối", "thất bại", "hết hạn"):
+        assert kw in PAYMENT_ERROR_KEYWORDS
+
+
+async def test_error_scan_js_embeds_keywords_verbatim():
+    js = error_scan_js(extra_keywords=("security reasons",))
+    assert '"không hợp lệ"' in js          # diacritics survive json embedding
+    assert '"security reasons"' in js      # extras appended
+    assert '"declined"' in js
+    assert js.count("const keywords") == 1
+
+
+async def test_structural_scan_targets_pipopay_error_markup():
+    """Structural detection keys on the DOM pipopay actually renders errors with
+    (div.pipo-input-error-msg — verified live on 2026-08-13), so it works in any
+    cashier language. It must require visible + non-empty text to avoid matching
+    empty error-styled wrappers."""
+    assert ".pipo-input-error-msg" in STRUCTURAL_ERROR_SCAN_JS
+    assert '[role="alert"]' in STRUCTURAL_ERROR_SCAN_JS
+    assert "getBoundingClientRect" in STRUCTURAL_ERROR_SCAN_JS  # visibility gate
+    assert "innerText" in STRUCTURAL_ERROR_SCAN_JS              # non-empty text gate
+
+
+async def test_error_scan_js_extras_do_not_mutate_base():
+    error_scan_js(extra_keywords=("one-off",))
+    assert "one-off" not in PAYMENT_ERROR_KEYWORDS
 
 
 async def test_parse_end_result_url_failed():

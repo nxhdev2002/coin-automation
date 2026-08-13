@@ -1,4 +1,3 @@
-import asyncio
 from loguru import logger
 
 from .browser import wait_for_element, click_element_js, parse_eval, human_sleep
@@ -44,7 +43,9 @@ async def select_custom_package(tab, coin_amount: int) -> bool:
         const btn = document.querySelector('[data-e2e="wallet-buy-now-button"]');
         if (!btn) return { found: false };
         const body = document.body.innerText || '';
-        const minMatch = body.match(/Minimum:\\s*(\\d+)/i);
+        // wallet page renders in the account's language — match the Vietnamese
+        // wording too, not just "Minimum: 30"
+        const minMatch = body.match(/(?:Minimum|T\\u1ed1i thi\\u1ec3u)\\s*:?\\s*(\\d+)/i);
         return {
             found: true,
             disabled: btn.disabled,

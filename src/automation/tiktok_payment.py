@@ -12,6 +12,60 @@ from .selectors import SELECTORS
 
 REQUIRED_CARD_FIELDS = {"card_number", "cvv", "holder_name", "expiry"}
 
+# The cashier renders in the account's language, not always English — a Vietnamese
+# profile shows "Thẻ không hợp lệ", which the English-only scan used to miss,
+# leaving the order to die on the 60s timeout with no reason attached.
+PAYMENT_ERROR_KEYWORDS = [
+    # English
+    "not supported", "invalid", "declined", "failed", "error",
+    "rejected", "insufficient", "expired",
+    # Vietnamese (kept specific — bare "lỗi" would match help text)
+    "không được hỗ trợ", "không hợp lệ", "bị từ chối", "thất bại",
+    "xảy ra lỗi", "không đủ", "hết hạn",
+]
+
+# One shared scanner for both the main page and the pipopay iframe, so the two
+# checks can never drift apart again. Keywords are injected via json to keep
+# quoting/diacritics intact.
+_ERROR_SCAN_JS = """
+(() => {
+    const body = document.body.innerText || '';
+    const keywords = %s;
+    for (const kw of keywords) {
+        if (body.toLowerCase().includes(kw)) {
+            const lines = body.split('\\n').filter(l =>
+                l.toLowerCase().includes(kw));
+            if (lines.length > 0) return lines[0].trim().slice(0, 200);
+        }
+    }
+    return null;
+})()
+"""
+
+
+def error_scan_js(extra_keywords: tuple[str, ...] = ()) -> str:
+    return _ERROR_SCAN_JS % json.dumps(PAYMENT_ERROR_KEYWORDS + list(extra_keywords), ensure_ascii=False)
+
+
+# Structural detection — preferred over keywords because it doesn't care what
+# language the cashier renders in. Verified against the live pipopay iframe
+# (2026-08-13): a card error renders as a visible `div.pipo-input-error-msg`
+# with the message text, the offending input gets `aria-invalid="true"`, and
+# its wrapper the `pipo-input-inner-wrapper-error` class.
+STRUCTURAL_ERROR_SCAN_JS = """
+(() => {
+    const candidates = document.querySelectorAll(
+        '.pipo-input-error-msg, [role="alert"], [aria-live="assertive"], [class*="error-msg"], [class*="error-message"]'
+    );
+    for (const el of candidates) {
+        const r = el.getBoundingClientRect();
+        const text = (el.innerText || '').trim();
+        if (r.width > 0 && r.height > 0 && text) return text.slice(0, 200);
+    }
+    return null;
+})()
+"""
+
 
 async def _find_pipopay_session(browser):
     """Find pipopay iframe target and attach to it. Returns session_id or None."""
@@ -166,8 +220,25 @@ def is_payment_success(result: dict) -> bool:
     return str(result.get("payment_status", "")).strip().lower() in PAYMENT_SUCCESS_STATUSES
 
 
+async def _eval_in_session(browser, session_id, expression: str):
+    result = await browser.send(uc.cdp.runtime.evaluate(
+        expression=expression,
+        return_by_value=True,
+    ), sessionId=session_id)
+    remote_obj, _ = result if result else (None, None)
+    return remote_obj.value if remote_obj else None
+
+
 async def wait_for_payment_result(browser, tab, timeout_seconds: int = 60) -> dict:
-    """Wait for payment result. Check URL redirect + error messages in pipopay iframe + main page."""
+    """Wait for payment result.
+
+    Detection order per poll:
+    1. URL redirect to /coin/end-result — the authoritative outcome.
+    2. Structural error scan (error-marked DOM nodes) in the pipopay iframe and
+       the main page — language-independent, preferred.
+    3. Text keyword scan as fallback, for error surfaces we haven't mapped
+       structurally yet (unknown toasts, redesigns).
+    """
     logger.info(f"Waiting for payment result (timeout {timeout_seconds}s)")
     start = time.time()
 
@@ -181,53 +252,36 @@ async def wait_for_payment_result(browser, tab, timeout_seconds: int = 60) -> di
             logger.info(f"Payment result URL detected: {parsed}")
             return parsed
 
-        # 2. Check for error messages on the main page (cashier modal)
-        main_error = await tab.evaluate("""
-            (() => {
-                const body = document.body.innerText || '';
-                const keywords = ['not supported', 'invalid', 'declined', 'failed',
-                                   'error', 'rejected', 'insufficient', 'expired'];
-                for (const kw of keywords) {
-                    if (body.toLowerCase().includes(kw)) {
-                        const lines = body.split('\\n').filter(l => 
-                            l.toLowerCase().includes(kw));
-                        if (lines.length > 0) return lines[0].trim().slice(0, 200);
-                    }
-                }
-                return null;
-            })()
-        """)
+        # 2. Structural scan — pipopay iframe first (card errors render there)
+        session_id = await _find_pipopay_session(browser)
+        if session_id:
+            structural = await _eval_in_session(browser, session_id, STRUCTURAL_ERROR_SCAN_JS)
+            if structural:
+                logger.info(f"Pipopay error element detected: {structural}")
+                return {"payment_status": "failed", "error_code": "CARD_ERROR",
+                        "message": str(structural)}
+
+        # ... then the main page (cashier modal)
+        main_structural = await tab.evaluate(STRUCTURAL_ERROR_SCAN_JS)
+        if main_structural:
+            logger.info(f"Main page error element detected: {main_structural}")
+            return {"payment_status": "failed", "error_code": "CARD_ERROR",
+                    "message": str(main_structural)}
+
+        # 3. Keyword fallback — main page, then iframe
+        main_error = await tab.evaluate(error_scan_js())
         if main_error:
-            logger.info(f"Main page error detected: {main_error}")
+            logger.info(f"Main page error keyword detected: {main_error}")
             return {"payment_status": "failed", "error_code": "CARD_ERROR",
                     "message": str(main_error)}
 
-        # 3. Check for error messages inside pipopay iframe via CDP
-        session_id = await _find_pipopay_session(browser)
         if session_id:
-            iframe_error = await browser.send(uc.cdp.runtime.evaluate(
-                expression="""
-                (() => {
-                    const body = document.body.innerText || '';
-                    const keywords = ['not supported', 'invalid', 'declined', 'failed',
-                                       'error', 'rejected', 'insufficient', 'expired',
-                                       'security reasons'];
-                    for (const kw of keywords) {
-                        if (body.toLowerCase().includes(kw)) {
-                            const lines = body.split('\\n').filter(l =>
-                                l.toLowerCase().includes(kw));
-                            if (lines.length > 0) return lines[0].trim().slice(0, 200);
-                        }
-                    }
-                    return null;
-                })()
-                """,
-                return_by_value=True,
-            ), sessionId=session_id)
-            remote_obj, _ = iframe_error if iframe_error else (None, None)
-            iframe_msg = remote_obj.value if remote_obj else None
+            iframe_msg = await _eval_in_session(
+                browser, session_id,
+                error_scan_js(extra_keywords=("security reasons", "lý do bảo mật")),
+            )
             if iframe_msg:
-                logger.info(f"Pipopay iframe error detected: {iframe_msg}")
+                logger.info(f"Pipopay error keyword detected: {iframe_msg}")
                 return {"payment_status": "failed", "error_code": "CARD_ERROR",
                         "message": str(iframe_msg)}
 

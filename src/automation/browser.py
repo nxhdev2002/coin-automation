@@ -19,6 +19,11 @@ async def launch_browser(profile_path: str, headless: bool = False):
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-infobars",
+        # Force English so TikTok's text (error messages, "Minimum: N" hints)
+        # stays matchable — the text-based checks have Vietnamese fallbacks, but
+        # other account languages would slip through them.
+        "--lang=en-US",
+        "--accept-lang=en-US,en",
     ]
     logger.info(f"Launching browser: profile={profile_path} headless={headless}")
     print(f"  >> uc.start()...", flush=True)
