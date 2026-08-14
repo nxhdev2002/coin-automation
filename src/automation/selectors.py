@@ -47,4 +47,8 @@ SELECTORS = {
 
     "captcha_keywords": ["captcha", "verify-image", "slider", "geetest", "secsdk", "tcaptcha"],
     "otp_keywords": ["otp", "verification code", "one-time", "security code", "3ds", "3d secure", "authenticate"],
+
+    "verify_dialog": '[role="dialog"]',
+    "verify_code_input": 'input[placeholder*="6-digit" i]',
+    "verify_next_btn_text": "Next",
 }

@@ -12,6 +12,7 @@ class FulfillRequest(BaseModel):
     card_cvv: str = ""
     card_expiry: str = ""
     card_holder_name: str = ""
+    payment_confirm_timeout_minutes: int = 5
 
 
 class FulfillResult(BaseModel):

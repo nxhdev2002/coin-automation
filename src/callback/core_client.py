@@ -51,5 +51,16 @@ class CoreClient:
         except Exception as e:
             logger.error(f"update_tiktok_profile failed: {e}")
 
+    async def get_verification_code(self, order_id: str) -> str | None:
+        try:
+            resp = await self._client.get(f"/internal/coins/verification-code/{order_id}")
+            if resp.status_code == 204:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"get_verification_code failed: {e}")
+            return None
+
     async def close(self):
         await self._client.aclose()

@@ -5,6 +5,12 @@ from loguru import logger
 
 from .browser import wait_for_element, human_sleep
 from .selectors import SELECTORS
+from .tiktok_verify import (
+    detect_verification_prompt,
+    click_verification_option,
+    fill_verification_code,
+    wait_for_verification_resolved,
+)
 
 
 async def check_logged_in(tab, timeout: float = 6.0, poll_interval: float = 0.4) -> bool:
@@ -29,9 +35,6 @@ async def check_logged_in(tab, timeout: float = 6.0, poll_interval: float = 0.4)
         try:
             result = await tab.evaluate(js)
         except Exception as e:
-            # A broken page must not pass for a logged-in one — keep polling and
-            # let the timeout fall through to False (the QR flow re-detects an
-            # actually-logged-in session via detect_login_success).
             logger.warning(f"check_logged_in evaluate failed: {type(e).__name__}: {e}")
             result = "unknown"
         if result == "logged_in":
@@ -80,7 +83,8 @@ async def get_qr_element_screenshot(tab) -> str | None:
         return None
 
 
-async def detect_login_success(tab) -> bool:
+async def detect_login_success(tab) -> str:
+    """Returns: 'logged_in', 'verification', or 'still_waiting'."""
     js = """
     (() => {
         const profile = document.querySelector('[data-e2e="profile-icon"]')
@@ -89,21 +93,33 @@ async def detect_login_success(tab) -> bool:
         const url = location.href;
         if (!url.includes('/login') && url.includes('tiktok.com')) return 'url_changed';
         const qr = document.querySelector('[data-e2e="qr-code"]');
+        const qrText = qr ? (qr.innerText || '').trim() : '';
+        if (qr && qrText.toLowerCase().includes('scanned')) return 'qr_scanned';
         if (!qr) return 'qr_gone';
         return 'still_login';
     })()
     """
     try:
         result = await tab.evaluate(js)
-        if result in ("logged_in", "url_changed", "qr_gone"):
+        if result in ("logged_in", "url_changed", "qr_gone", "qr_scanned"):
             await human_sleep(1, 3)
             result2 = await tab.evaluate(js)
             logger.info(f"Login check: {result} -> {result2}")
-            return result2 in ("logged_in", "url_changed")
-        return False
+
+            if result2 in ("logged_in", "url_changed"):
+                return "logged_in"
+
+            if result2 in ("still_login", "qr_gone", "qr_scanned"):
+                verify_target = await detect_verification_prompt(tab)
+                if verify_target:
+                    logger.info(f"Verification prompt detected: {verify_target}")
+                    return "verification"
+
+            return "still_waiting"
+        return "still_waiting"
     except Exception as e:
         logger.warning(f"Login check error: {e}")
-        return False
+        return "still_waiting"
 
 
 async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5) -> bool:
@@ -126,6 +142,11 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
     last_qr_sent = None
 
     while datetime.now(timezone.utc) < deadline:
+        verify_target = await detect_verification_prompt(tab)
+        if verify_target:
+            logger.info(f"Verification popup detected in main loop: {verify_target}")
+            return await handle_verification(tab, callback_client, order_id, deadline, verify_target)
+
         qr_b64 = await get_qr_element_screenshot(tab)
         if qr_b64 and qr_b64 != last_qr_sent:
             qr_expires = datetime.now(timezone.utc) + timedelta(seconds=90)
@@ -136,12 +157,17 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
             last_qr_sent = qr_b64
             logger.info("QR code sent to frontend")
 
-        if await detect_login_success(tab):
+        status = await detect_login_success(tab)
+        if status == "logged_in":
             logger.info("Login detected after QR scan")
             await callback_client.update_order(order_id, {
                 "fulfillmentPhase": "LoggedIn",
             })
             return True
+
+        if status == "verification":
+            logger.info("Verification required — entering verify flow")
+            return await handle_verification(tab, callback_client, order_id, deadline)
 
         if datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
             logger.info("QR likely expired, refreshing...")
@@ -154,4 +180,59 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         await asyncio.sleep(2)
 
     logger.warning("QR login timeout")
+    return False
+
+
+async def handle_verification(tab, callback_client, order_id: str, deadline, verify_target: str | None = None) -> bool:
+    """Handle the post-QR verification step.
+
+    1. Detect verification target (masked email/phone)
+    2. Report to backend so frontend can show input
+    3. Poll backend for user-submitted code
+    4. Fill code + click Next
+    5. Wait for dialog to disappear
+    """
+    if not verify_target:
+        verify_target = await detect_verification_prompt(tab)
+        if not verify_target:
+            logger.error("Verification dialog not found")
+            return False
+
+    logger.info(f"Verification target: {verify_target}")
+    await callback_client.update_order(order_id, {
+        "fulfillmentPhase": "WaitingForVerification",
+        "verificationTarget": verify_target,
+    })
+
+    clicked = await click_verification_option(tab, verify_target)
+    if not clicked:
+        logger.error("Could not click verification option")
+        return False
+    logger.info("Clicked verification option — code input should appear")
+    await human_sleep(1, 3)
+
+    poll_deadline = min(deadline, datetime.now(timezone.utc) + timedelta(minutes=5))
+    while datetime.now(timezone.utc) < poll_deadline:
+        code = await callback_client.get_verification_code(order_id)
+        if code:
+            logger.info(f"Verification code received: {code}")
+            filled = await fill_verification_code(tab, code)
+            if not filled:
+                logger.error("Failed to fill verification code")
+                return False
+
+            resolved = await wait_for_verification_resolved(tab, timeout=30)
+            if resolved:
+                logger.info("Verification succeeded — login complete")
+                await callback_client.update_order(order_id, {
+                    "fulfillmentPhase": "LoggedIn",
+                })
+                return True
+            else:
+                logger.error("Verification code was rejected")
+                return False
+
+        await asyncio.sleep(3)
+
+    logger.warning("Verification code timeout — user did not submit code in time")
     return False

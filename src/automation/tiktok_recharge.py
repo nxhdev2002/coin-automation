@@ -1,3 +1,5 @@
+import asyncio
+
 from loguru import logger
 
 from .browser import wait_for_element, click_element_js, parse_eval, human_sleep
@@ -90,6 +92,63 @@ async def click_recharge(tab) -> bool:
     await human_sleep(3, 5)
     logger.info(f"Recharge button clicked: {ok}")
     return ok
+
+
+async def detect_post_recharge_redirect(tab, timeout: float = 10.0) -> bool:
+    """After clicking recharge, check if the page redirected away from the wallet/coin page.
+
+    TikTok may redirect to an email confirmation page that requires manual action.
+    Returns True if a redirect is detected.
+    """
+    js = """
+    (() => {
+        const url = location.href;
+        if (!url.includes('/coin') && !url.includes('/wallet')) return 'redirected';
+        return 'same_page';
+    })()
+    """
+    elapsed = 0.0
+    while elapsed < timeout:
+        try:
+            result = await tab.evaluate(js)
+            result = parse_eval(result)
+            if result == 'redirected':
+                logger.info(f"[Recharge] Page redirected after recharge: {result}")
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+        elapsed += 1
+    return False
+
+
+async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_client=None, order_id: str = "") -> bool:
+    """Wait for the user to manually confirm email and return to the coin/wallet page.
+
+    Polls the URL until it returns to /coin or /wallet, or until timeout.
+    Updates the order phase if callback_client is provided.
+    """
+    if callback_client and order_id:
+        await callback_client.update_order(order_id, {
+            "fulfillmentPhase": "WaitingForVerification",
+        })
+
+    timeout_seconds = timeout_minutes * 60
+    elapsed = 0.0
+    while elapsed < timeout_seconds:
+        try:
+            result = await tab.evaluate("location.href")
+            result = parse_eval(result)
+            if isinstance(result, str) and ('/coin' in result or '/wallet' in result):
+                logger.info(f"[Recharge] Returned to coin/wallet page after manual confirm")
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(5)
+        elapsed += 5
+
+    logger.warning(f"[Recharge] Timeout waiting for manual confirm ({timeout_minutes}m)")
+    return False
 
 
 async def select_add_card(tab) -> bool:

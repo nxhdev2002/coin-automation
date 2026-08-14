@@ -6,7 +6,7 @@ from .automation.browser import launch_browser, wait_for_element, human_sleep
 from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
     select_custom_package, click_recharge, select_add_card,
-    skip_link_card_prompt,
+    skip_link_card_prompt, detect_post_recharge_redirect, wait_for_post_recharge_return,
 )
 from .automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
@@ -122,6 +122,27 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 failure_reason="Could not click Recharge button",
                 screenshot_path=screenshot,
             )
+
+        if await detect_post_recharge_redirect(tab, timeout=10):
+            logger.info("Page redirected after recharge — waiting for manual email confirm")
+            returned = await wait_for_post_recharge_return(
+                tab,
+                timeout_minutes=request.payment_confirm_timeout_minutes,
+                callback_client=core_client,
+                order_id=request.order_id,
+            )
+            if not returned:
+                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+                return FulfillResult(
+                    success=False,
+                    failure_category="PaymentConfirmTimeout",
+                    failure_reason="Timeout waiting for manual email confirmation after recharge",
+                    screenshot_path=screenshot,
+                )
+            logger.info("Manual confirm done — continuing with payment flow")
+            await core_client.update_order(request.order_id, {
+                "fulfillmentPhase": "PurchasingCoins",
+            })
 
         add_card_ok = await select_add_card(tab)
         if not add_card_ok:
