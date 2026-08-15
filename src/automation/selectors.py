@@ -45,7 +45,8 @@ SELECTORS = {
     "payment_success_text": "Purchase completed",
     "payment_failed_text": "Card not authenticated",
 
-    "captcha_keywords": ["captcha", "verify-image", "slider", "geetest", "secsdk", "tcaptcha"],
+    "captcha_keywords": ["captcha", "verify-image", "slider", "geetest", "secsdk", "tcaptcha", "puzzle", "slide-btn", "slider-thumb"],
+    "captcha_slider_handle": 'div[class*="slider-thumb"], div[class*="slide-btn"], div[class*="slider-button"], div[class*="slider-handle"], div[class*="captcha-slider"], span[class*="slider"], div[role="slider"]',
     "otp_keywords": ["otp", "verification code", "one-time", "security code", "3ds", "3d secure", "authenticate"],
 
     "verify_dialog": '[role="dialog"]',

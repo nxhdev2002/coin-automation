@@ -135,7 +135,7 @@ async def fill_verification_code(tab, code: str) -> bool:
         return False
 
 
-async def wait_for_verification_resolved(tab, timeout: float = 30.0) -> bool:
+async def wait_for_verification_resolved(tab, timeout: float = 120.0) -> bool:
     """Wait until the verification dialog disappears (login succeeded)."""
     js = """
     (() => {

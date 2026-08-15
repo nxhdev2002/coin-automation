@@ -3,6 +3,7 @@ import asyncio
 from loguru import logger
 
 from .automation.browser import launch_browser, wait_for_element, human_sleep
+from .automation.captcha_solver import detect_captcha, solve_captcha
 from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
     select_custom_package, click_recharge, select_add_card,
@@ -68,6 +69,17 @@ async def _save_profile(core_client: CoreClient, request: FulfillRequest, path: 
 
 
 async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+    _captcha = {"encountered": False, "solved": False, "cost": 0.0}
+
+    async def _check_captcha(tab):
+        info = await detect_captcha(tab)
+        if info:
+            _captcha["encountered"] = True
+            result = await solve_captcha(tab, settings)
+            if result:
+                _captcha["cost"] += result.get("cost", 0.0)
+                _captcha["solved"] = _captcha["solved"] or result["solved"]
+
     profile = profile_path(
         settings.profile_dir,
         profile_name(request.user_name, request.tiktok_username),
@@ -101,6 +113,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         })
 
         tab = await browser.get(SELECTORS["recharge_url"])
+        await _check_captcha(tab)
         await human_sleep(3, 5)
 
         selected = await select_custom_package(tab, request.coin_amount)
@@ -121,7 +134,12 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 failure_category="UiElementNotFound",
                 failure_reason="Could not click Recharge button",
                 screenshot_path=screenshot,
+                captcha_encountered=_captcha["encountered"],
+                captcha_solved=_captcha["solved"],
+                captcha_cost_usd=_captcha["cost"],
             )
+
+        await _check_captcha(tab)
 
         if await detect_post_recharge_redirect(tab, timeout=10):
             logger.info("Page redirected after recharge — waiting for manual email confirm")
@@ -215,6 +233,9 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 success=True,
                 screenshot_path=screenshot,
                 fulfillment_phase="Done",
+                captcha_encountered=_captcha["encountered"],
+                captcha_solved=_captcha["solved"],
+                captcha_cost_usd=_captcha["cost"],
             )
         else:
             error_code = result.get("error_code", "")
@@ -239,6 +260,9 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 failure_reason=reason,
                 screenshot_path=screenshot,
                 fulfillment_phase="Done",
+                captcha_encountered=_captcha["encountered"],
+                captcha_solved=_captcha["solved"],
+                captcha_cost_usd=_captcha["cost"],
             )
 
     finally:

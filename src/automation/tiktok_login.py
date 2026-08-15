@@ -5,6 +5,8 @@ from loguru import logger
 
 from .browser import wait_for_element, human_sleep
 from .selectors import SELECTORS
+from .captcha_solver import detect_captcha, solve_captcha
+from ..config import get_settings
 from .tiktok_verify import (
     detect_verification_prompt,
     click_verification_option,
@@ -130,6 +132,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
     re-navigate there, to avoid loading the login page twice.
     """
     logger.info("Starting QR login flow")
+    settings = get_settings()
     await callback_client.update_order(order_id, {
         "fulfillmentPhase": "WaitingForQrScan",
     })
@@ -146,6 +149,13 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         if verify_target:
             logger.info(f"Verification popup detected in main loop: {verify_target}")
             return await handle_verification(tab, callback_client, order_id, deadline, verify_target)
+
+        captcha_result = await solve_captcha(tab, settings)
+        if captcha_result:
+            if not captcha_result["solved"]:
+                logger.error(f"Captcha not solved during QR login: {captcha_result}")
+                return False
+            logger.info(f"Captcha solved during QR login: {captcha_result}")
 
         qr_b64 = await get_qr_element_screenshot(tab)
         if qr_b64 and qr_b64 != last_qr_sent:
@@ -192,6 +202,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
     4. Fill code + click Next
     5. Wait for dialog to disappear
     """
+    settings = get_settings()
     if not verify_target:
         verify_target = await detect_verification_prompt(tab)
         if not verify_target:
@@ -211,6 +222,13 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
     logger.info("Clicked verification option — code input should appear")
     await human_sleep(1, 3)
 
+    captcha_result = await solve_captcha(tab, settings)
+    if captcha_result:
+        if not captcha_result["solved"]:
+            logger.error(f"Captcha not solved after verification click: {captcha_result}")
+            return False
+        logger.info(f"Captcha solved after verification click: {captcha_result}")
+
     poll_deadline = min(deadline, datetime.now(timezone.utc) + timedelta(minutes=5))
     while datetime.now(timezone.utc) < poll_deadline:
         code = await callback_client.get_verification_code(order_id)
@@ -221,7 +239,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
                 logger.error("Failed to fill verification code")
                 return False
 
-            resolved = await wait_for_verification_resolved(tab, timeout=30)
+            resolved = await wait_for_verification_resolved(tab, timeout=120)
             if resolved:
                 logger.info("Verification succeeded — login complete")
                 await callback_client.update_order(order_id, {
