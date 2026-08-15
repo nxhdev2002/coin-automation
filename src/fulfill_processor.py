@@ -2,9 +2,9 @@ import asyncio
 
 from loguru import logger
 
-from .automation.browser import launch_browser, wait_for_element, human_sleep
+from .automation.browser import launch_browser, close_browser, wait_for_element, human_sleep, parse_eval
 from .automation.captcha_solver import detect_captcha, solve_captcha
-from .automation.tiktok_login import qr_login, check_logged_in
+from .automation.tiktok_login import qr_login, check_logged_in, fetch_identity
 from .automation.tiktok_recharge import (
     select_custom_package, click_recharge, select_add_card,
     skip_link_card_prompt, detect_post_recharge_redirect, wait_for_post_recharge_return,
@@ -19,26 +19,29 @@ from .callback.core_client import CoreClient
 from .config import get_settings
 from .concurrency.lock_manager import get_lock_manager
 from .models.fulfill import FulfillRequest, FulfillResult
-from .profile.paths import profile_name, profile_path
+from .profile.paths import profile_path
 
 
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
     settings = get_settings()
     lock_mgr = get_lock_manager()
 
-    lock_key = profile_name(request.user_name, request.tiktok_username)
+    # TopUp and re-login both act on an existing, already-known profile directory —
+    # lock on that path directly. A brand-new add-account has no profile yet, so it
+    # locks on its own link-request id instead (never collides with a real profile path).
+    lock_key = request.profile_path or f"link:{request.order_id}"
     await lock_mgr.acquire(lock_key)
     try:
-        # Hard ceiling for the whole order: every step has its own timeout, but
+        # Hard ceiling for the whole run: every step has its own timeout, but
         # a hung CDP call would otherwise block forever — holding this profile's
-        # lock and queueing every later order for the same account.
+        # lock and queueing every later request for the same account.
         timeout_s = settings.order_timeout_minutes * 60
         if timeout_s > 0:
             async with asyncio.timeout(timeout_s):
-                return await _do_fulfill(request, core_client, settings)
-        return await _do_fulfill(request, core_client, settings)
+                return await _dispatch(request, core_client, settings)
+        return await _dispatch(request, core_client, settings)
     except TimeoutError:
-        logger.error(f"Order {request.order_id} exceeded {settings.order_timeout_minutes} min, aborted")
+        logger.error(f"Request {request.order_id} exceeded {settings.order_timeout_minutes} min, aborted")
         return FulfillResult(
             success=False,
             failure_category="OrderTimeout",
@@ -57,19 +60,19 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
         lock_mgr.release(lock_key)
 
 
-async def _save_profile(core_client: CoreClient, request: FulfillRequest, path: str):
-    try:
-        existing = await core_client.get_tiktok_profile(request.user_id, request.tiktok_username)
-        if existing:
-            logger.info(f"Profile already exists for {request.user_name}-{request.tiktok_username}")
-            return
-        await core_client.create_tiktok_profile(request.user_id, request.tiktok_username, path)
-        logger.info(f"Profile created for {request.user_name}-{request.tiktok_username}")
-    except Exception as e:
-        logger.warning(f"Failed to save profile: {e}")
+async def _dispatch(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+    if request.mode == "LoginOnly":
+        return await _do_login_only(request, core_client, settings)
+    return await _do_topup(request, core_client, settings)
 
 
-async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+    """Recharge on an already-linked, session-valid profile.
+
+    Deliberately does NOT fall back to a QR login: a stale session must
+    surface as "please log in again" (fast, via the account-link/re-login
+    flow), not silently retry a full login mid-purchase.
+    """
     _captcha = {"encountered": False, "solved": False, "cost": 0.0}
 
     async def _check_captcha(tab):
@@ -81,10 +84,13 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 _captcha["cost"] += result.get("cost", 0.0)
                 _captcha["solved"] = _captcha["solved"] or result["solved"]
 
-    profile = profile_path(
-        settings.profile_dir,
-        profile_name(request.user_name, request.tiktok_username),
-    )
+    profile = request.profile_path
+    if not profile:
+        return FulfillResult(
+            success=False,
+            failure_category="ProfileMissing",
+            failure_reason="No linked TikTok profile path was provided for this top-up",
+        )
 
     await core_client.update_order(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",
@@ -97,17 +103,14 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
 
         logged_in = await check_logged_in(tab)
         if not logged_in:
-            logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
-            if not logged_in:
-                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-                return FulfillResult(
-                    success=False,
-                    failure_category="QrScanTimeout",
-                    failure_reason="QR scan timeout",
-                    screenshot_path=screenshot,
-                )
-
-        await _save_profile(core_client, request, profile)
+            logger.warning(f"Top-up {request.order_id}: session expired for profile {request.tiktok_profile_id or profile}")
+            if request.tiktok_profile_id:
+                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": False})
+            return FulfillResult(
+                success=False,
+                failure_category="SessionExpired",
+                failure_reason="TikTok session expired — please log in to this account again",
+            )
 
         await core_client.update_order(request.order_id, {
             "fulfillmentPhase": "PurchasingCoins",
@@ -118,6 +121,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         await _check_captcha(tab)
 
         # Verify we're actually on the coin/wallet page
+        current_url = ""
         for attempt in range(3):
             try:
                 current_url = await tab.evaluate("location.href")
@@ -262,6 +266,8 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
 
         if is_payment_success(result):
             logger.info(f"Payment SUCCESS for order {request.order_id}")
+            if request.tiktok_profile_id:
+                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
             return FulfillResult(
                 success=True,
                 screenshot_path=screenshot,
@@ -287,6 +293,8 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                     reason += f" - {detail}"
 
             logger.warning(f"Payment FAILED for order {request.order_id}: {reason}")
+            if request.tiktok_profile_id:
+                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
             return FulfillResult(
                 success=False,
                 failure_category=category,
@@ -300,6 +308,67 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
 
     finally:
         try:
-            browser.stop()
+            await close_browser(browser)
+        except Exception:
+            pass
+
+
+async def _do_login_only(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+    """QR login only — used both to add a brand-new account (then identify + link
+    it) and to re-establish a stale session on an existing profile. No purchase."""
+    is_new_account = not request.profile_path
+    profile = request.profile_path or profile_path(settings.profile_dir, request.order_id)
+
+    await core_client.update_account_link(request.order_id, {
+        "fulfillmentPhase": "LaunchingBrowser",
+    })
+
+    browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
+
+    try:
+        tab = await browser.get(SELECTORS["login_url"])
+
+        logged_in = await check_logged_in(tab)
+        if not logged_in:
+            logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
+            if not logged_in:
+                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+                return FulfillResult(
+                    success=False,
+                    failure_category="QrScanTimeout",
+                    failure_reason="QR scan timeout",
+                    screenshot_path=screenshot,
+                )
+
+        if is_new_account:
+            # fetch_identity reads wallet-user-name/profile-icon, which only exist
+            # on /coin — qr_login leaves `tab` on the login page after scan, so
+            # without this navigation every identity read comes back null.
+            tab = await browser.get(SELECTORS["recharge_url"])
+            await human_sleep(3, 5)
+            identity = await fetch_identity(tab)
+            username = identity.get("display_name") or f"tiktok-{request.order_id[:8]}"
+            profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile)
+            profile_id = profile_record.get("id")
+            await core_client.update_tiktok_profile(profile_id, {
+                "sessionValid": True,
+                "avatarUrl": identity.get("avatar_url"),
+                "displayName": identity.get("display_name"),
+            })
+        else:
+            profile_id = request.tiktok_profile_id
+            await core_client.update_tiktok_profile(profile_id, {"sessionValid": True})
+
+        return FulfillResult(success=True, fulfillment_phase="Done", tiktok_profile_id=profile_id or "")
+
+    except Exception as e:
+        import traceback
+        logger.error(f"Add-account/re-login error for {request.order_id}: {e}")
+        logger.error(traceback.format_exc())
+        return FulfillResult(success=False, failure_category="Unknown", failure_reason=str(e))
+
+    finally:
+        try:
+            await close_browser(browser)
         except Exception:
             pass

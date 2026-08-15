@@ -73,5 +73,36 @@ class CoreClient:
             logger.error(f"get_verification_option failed: {e}")
             return None
 
+    async def update_account_link(self, link_request_id: str, data: dict) -> None:
+        set_order_status(data.get("fulfillmentPhase", ""))
+        try:
+            resp = await self._client.post(f"/internal/coins/account-link/{link_request_id}/update", json=data)
+            resp.raise_for_status()
+            logger.debug(f"update_account_link {link_request_id}: {data}")
+        except Exception as e:
+            logger.error(f"update_account_link failed: {e}")
+
+    async def get_account_link_verification_code(self, link_request_id: str) -> str | None:
+        try:
+            resp = await self._client.get(f"/internal/coins/account-link/{link_request_id}/verification-code")
+            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
+                return None
+            resp.raise_for_status()
+            return resp.text.strip()
+        except Exception as e:
+            logger.error(f"get_account_link_verification_code failed: {e}")
+            return None
+
+    async def get_account_link_verification_option(self, link_request_id: str) -> str | None:
+        try:
+            resp = await self._client.get(f"/internal/coins/account-link/{link_request_id}/verification-option")
+            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
+                return None
+            resp.raise_for_status()
+            return resp.text.strip()
+        except Exception as e:
+            logger.error(f"get_account_link_verification_option failed: {e}")
+            return None
+
     async def close(self):
         await self._client.aclose()

@@ -38,38 +38,54 @@ async def _run_fulfillment_background(request: FulfillRequest):
 
 async def _fulfill_and_report(request: FulfillRequest):
     drain_mgr = get_drain_manager()
+    is_login_only = request.mode == "LoginOnly"
     try:
         result = await process_order(request, get_core_client())
         if result.success:
             drain_mgr.mark_fulfilled(request.order_id)
 
         logger.info(
-            f"Order {request.order_id} finished: success={result.success} "
+            f"Request {request.order_id} finished: success={result.success} "
             f"category={result.failure_category or '-'} reason={result.failure_reason or '-'}"
         )
 
-        await get_core_client().update_order(request.order_id, {
-            "fulfillmentPhase": "Done",
-            "success": result.success,
-            "failureReason": result.failure_reason,
-            "failureCategory": result.failure_category,
-            "screenshotPath": result.screenshot_path,
-            "captchaEncountered": result.captcha_encountered,
-            "captchaSolved": result.captcha_solved,
-            "captchaCostUsd": result.captcha_cost_usd,
-        })
+        if is_login_only:
+            await get_core_client().update_account_link(request.order_id, {
+                "fulfillmentPhase": "Done",
+                "success": result.success,
+                "failureReason": result.failure_reason,
+                "tikTokProfileId": result.tiktok_profile_id or None,
+            })
+        else:
+            await get_core_client().update_order(request.order_id, {
+                "fulfillmentPhase": "Done",
+                "success": result.success,
+                "failureReason": result.failure_reason,
+                "failureCategory": result.failure_category,
+                "screenshotPath": result.screenshot_path,
+                "captchaEncountered": result.captcha_encountered,
+                "captchaSolved": result.captcha_solved,
+                "captchaCostUsd": result.captcha_cost_usd,
+            })
     except Exception as e:
         import traceback
         set_order_status("Error")
-        logger.error(f"Background fulfillment error for order {request.order_id}: {e}")
+        logger.error(f"Background fulfillment error for {request.order_id}: {e}")
         logger.error(traceback.format_exc())
         try:
-            await get_core_client().update_order(request.order_id, {
-                "fulfillmentPhase": "Done",
-                "success": False,
-                "failureReason": str(e)[:500],
-                "failureCategory": "Unknown",
-            })
+            if is_login_only:
+                await get_core_client().update_account_link(request.order_id, {
+                    "fulfillmentPhase": "Done",
+                    "success": False,
+                    "failureReason": str(e)[:500],
+                })
+            else:
+                await get_core_client().update_order(request.order_id, {
+                    "fulfillmentPhase": "Done",
+                    "success": False,
+                    "failureReason": str(e)[:500],
+                    "failureCategory": "Unknown",
+                })
         except Exception:
             pass
     finally:

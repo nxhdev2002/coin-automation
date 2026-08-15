@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from .browser import wait_for_element, human_sleep
+from .browser import wait_for_element, human_sleep, parse_eval
 from .selectors import SELECTORS
 from .captcha_solver import detect_captcha, solve_captcha
 from ..config import get_settings
@@ -139,6 +139,44 @@ async def detect_login_success(tab) -> str:
         return "still_waiting"
 
 
+async def fetch_identity(tab) -> dict:
+    """Read the logged-in account's own username/avatar off the /coin page.
+
+    Only meaningful right after a fresh login — used to confirm which TikTok
+    account actually just authenticated (add-account flow), rather than trusting
+    whatever the caller typed. Verified 2026-08-15 against the live page: the
+    avatar has no <img> tag — it's a CSS background-image on the profile-icon
+    div, so it has to be pulled out of the computed style, not `.src`.
+    """
+    js = f"""
+    (() => {{
+        const nameEl = document.querySelector('{SELECTORS["wallet_user_name"]}');
+        const iconEl = document.querySelector('{SELECTORS["wallet_avatar_icon"]}');
+        let avatarUrl = null;
+        if (iconEl) {{
+            const bg = getComputedStyle(iconEl).backgroundImage;
+            const match = bg && bg.match(/url\\((['"]?)(.*?)\\1\\)/);
+            avatarUrl = match ? match[2] : null;
+        }}
+        return {{
+            display_name: nameEl ? (nameEl.innerText || '').trim() : null,
+            avatar_url: avatarUrl,
+        }};
+    }})()
+    """
+    try:
+        result = await tab.evaluate(js)
+        result = parse_eval(result) or {}
+        logger.info(f"[Identity] fetched: {result}")
+        return {
+            "display_name": result.get("display_name") or None,
+            "avatar_url": result.get("avatar_url") or None,
+        }
+    except Exception as e:
+        logger.warning(f"[Identity] fetch failed: {e}")
+        return {"display_name": None, "avatar_url": None}
+
+
 async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5) -> bool:
     """Run the QR login flow.
 
@@ -148,7 +186,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
     """
     logger.info("Starting QR login flow")
     settings = get_settings()
-    await callback_client.update_order(order_id, {
+    await callback_client.update_account_link(order_id, {
         "fulfillmentPhase": "WaitingForQrScan",
     })
 
@@ -174,7 +212,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         qr_b64 = await get_qr_element_screenshot(tab)
         if qr_b64 and qr_b64 != last_qr_sent:
             qr_expires = datetime.now(timezone.utc) + timedelta(seconds=90)
-            await callback_client.update_order(order_id, {
+            await callback_client.update_account_link(order_id, {
                 "qrCodeBase64": qr_b64,
                 "qrCodeExpiresAt": qr_expires.isoformat(),
             })
@@ -184,7 +222,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         status = await detect_login_success(tab)
         if status == "logged_in":
             logger.info("Login detected after QR scan")
-            await callback_client.update_order(order_id, {
+            await callback_client.update_account_link(order_id, {
                 "fulfillmentPhase": "LoggedIn",
             })
             return True
@@ -233,7 +271,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
             options = [verify_target]
 
     logger.info(f"Verification options: {options}")
-    await callback_client.update_order(order_id, {
+    await callback_client.update_account_link(order_id, {
         "fulfillmentPhase": "WaitingForVerification",
         "verificationOptions": options,
     })
@@ -247,7 +285,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
         option_deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
         selected_option = None
         while datetime.now(timezone.utc) < option_deadline:
-            selected_option = await callback_client.get_verification_option(order_id)
+            selected_option = await callback_client.get_account_link_verification_option(order_id)
             if selected_option:
                 logger.info(f"User selected verification option: {selected_option}")
                 break
@@ -277,7 +315,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
 
     poll_deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
     while datetime.now(timezone.utc) < poll_deadline:
-        code = await callback_client.get_verification_code(order_id)
+        code = await callback_client.get_account_link_verification_code(order_id)
         if code:
             logger.info(f"Verification {'password' if is_password else 'code'} received: {'***' if is_password else code}")
             filled = await fill_verification_code(tab, code, is_password=is_password)
@@ -288,7 +326,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
             resolved = await wait_for_verification_resolved(tab, timeout=120)
             if resolved:
                 logger.info("Verification succeeded — login complete")
-                await callback_client.update_order(order_id, {
+                await callback_client.update_account_link(order_id, {
                     "fulfillmentPhase": "LoggedIn",
                 })
                 return True

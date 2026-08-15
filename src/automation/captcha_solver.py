@@ -736,56 +736,8 @@ async def solve_captcha(tab, settings) -> dict | None:
             if not still:
                 logger.info(f"[CAPTCHA] SOLVED by SadCaptcha extension after {wait+1}s")
                 return {"solved": True, "cost": 0.0, "type": captcha_type, "attempts": 1, "method": "sadcaptcha"}
-        logger.warning("[CAPTCHA] SadCaptcha extension timeout — falling back to manual solve")
+        logger.warning("[CAPTCHA] SadCaptcha extension timeout — captcha not solved")
+        return {"solved": False, "cost": 0.0, "type": captcha_type, "attempts": 1, "method": "sadcaptcha"}
 
-    # Manual solving fallback (edge detection + 2captcha)
-    rect = {
-        "x": captcha_info.get("x", 0),
-        "y": captcha_info.get("y", 0),
-        "w": captcha_info.get("w", 0),
-        "h": captcha_info.get("h", 0),
-    }
-
-    api_key = settings.two_captcha_api_key
-    if api_key:
-        from twocaptcha import AsyncTwoCaptcha
-        solver = AsyncTwoCaptcha(api_key, pollingInterval=5, defaultTimeout=300)
-    else:
-        solver = None
-        logger.info("[CAPTCHA] no 2captcha API key — using edge detection only")
-
-    max_retries = settings.captcha_max_retries
-    total_cost = 0.0
-
-    for attempt in range(1, max_retries + 1):
-        logger.info(f"[CAPTCHA] solve attempt {attempt}/{max_retries}: type={captcha_type}")
-
-        if captcha_type == "slider":
-            result = await solve_slider_captcha(tab, solver, rect, settings.screenshot_dir, "")
-        elif captcha_type == "geetest":
-            if not solver:
-                logger.error("[CAPTCHA] GeeTest requires 2captcha API key")
-                return {"solved": False, "cost": 0.0, "type": "geetest", "attempts": 0}
-            result = await solve_geetest_captcha(tab, solver, rect, settings.screenshot_dir, "")
-        else:
-            if not solver:
-                logger.error(f"[CAPTCHA] {captcha_type} requires 2captcha API key")
-                return {"solved": False, "cost": 0.0, "type": captcha_type, "attempts": 0}
-            result = await solve_generic_captcha(tab, solver, rect, settings.screenshot_dir, "", captcha_type)
-
-        total_cost += result.get("cost", 0.0)
-
-        if result["solved"]:
-            logger.info(f"[CAPTCHA] SOLVED: type={captcha_type}, cost=${total_cost:.4f}, attempts={attempt}")
-            return {"solved": True, "cost": total_cost, "type": captcha_type, "attempts": attempt}
-
-        logger.warning(f"[CAPTCHA] attempt {attempt} failed, retrying...")
-        await human_sleep(1, 3)
-
-        captcha_info = await detect_captcha(tab)
-        if not captcha_info:
-            logger.info("[CAPTCHA] captcha disappeared between retries — solved externally")
-            return {"solved": True, "cost": total_cost, "type": captcha_type, "attempts": attempt}
-
-    logger.error(f"[CAPTCHA] FAILED after {max_retries} retries, type={captcha_type}, cost=${total_cost:.4f}")
-    return {"solved": False, "cost": total_cost, "type": captcha_type, "attempts": max_retries}
+    logger.warning("[CAPTCHA] No SadCaptcha key — captcha cannot be solved")
+    return {"solved": False, "cost": 0.0, "type": captcha_type, "attempts": 0, "method": "none"}

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from ..automation.browser import launch_browser
+from ..automation.browser import launch_browser, close_browser
 from ..automation.tiktok_login import check_logged_in
 from ..concurrency.lock_manager import get_lock_manager
 from ..config import get_settings
@@ -84,7 +84,7 @@ class SpawnManager:
         except Exception:
             if browser is not None:
                 try:
-                    browser.stop()
+                    await close_browser(browser)
                 except Exception:
                     pass
             lock_mgr.release(lock_key)
@@ -123,7 +123,7 @@ class SpawnManager:
             task.cancel()
 
         try:
-            session.browser.stop()
+            await close_browser(session.browser)
         except Exception as e:
             logger.warning(f"Closing browser for session {session_id} failed: {e}")
 

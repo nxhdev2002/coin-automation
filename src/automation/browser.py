@@ -110,6 +110,38 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
     return browser
 
 
+async def close_browser(browser, grace_seconds: float = 3.0) -> None:
+    """Shut Chrome down gracefully instead of killing the process outright.
+
+    `Browser.stop()` (nodriver) calls `self._process.terminate()`/`.kill()`
+    almost immediately — that's a hard kill, not a real shutdown, so Chrome
+    never gets to flush the profile's cookie/session DB to disk. A TikTok
+    login session established moments earlier can come back logged-out the
+    next time this same profile is launched, because the write never landed.
+
+    Ask Chrome to close itself first (`Browser.close` — flushes profile data
+    the same way quitting normally would), give it a moment to actually exit,
+    and only fall back to the hard kill in `browser.stop()` if it doesn't.
+    """
+    try:
+        await browser.send(uc.cdp.browser.close())
+    except Exception:
+        pass
+
+    process = getattr(browser, "_process", None)
+    if process is not None:
+        deadline = asyncio.get_event_loop().time() + grace_seconds
+        while asyncio.get_event_loop().time() < deadline:
+            if process.poll() is not None:
+                break
+            await asyncio.sleep(0.1)
+
+    try:
+        browser.stop()
+    except Exception:
+        pass
+
+
 async def wait_for_element(tab, selector: str, timeout: int = 30, poll_interval: float = 0.5) -> bool:
     """Poll via JS for an element to appear. Returns True if found, False on timeout."""
     js = f"""

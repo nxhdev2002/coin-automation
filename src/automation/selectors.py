@@ -10,6 +10,9 @@ SELECTORS = {
     "login_button": '[data-e2e="top-login-button"]',
     "profile_icon": '[data-e2e="profile-icon"]',
     "wallet_user_name": '[data-e2e="wallet-user-name"]',
+    # Verified 2026-08-15 against the live /coin page: there is no <img> for the
+    # avatar — it's a CSS background-image on this div. See fetch_identity().
+    "wallet_avatar_icon": '[data-e2e="profile-icon"]',
     "wallet_coins_balance": '[data-e2e="wallet-coins-balance"]',
 
     "wallet_title_get_coins": '[data-e2e="wallet-title-get-coins"]',
