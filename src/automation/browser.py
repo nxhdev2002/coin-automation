@@ -72,6 +72,14 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
         "--disable-infobars",
         "--lang=en-US",
         "--accept-lang=en-US,en",
+        "--blink-settings=imagesEnabled=false",
+        "--disable-features=LazyImageLoading,MediaRouter,Translate",
+        "--mute-audio",
+        "--disable-background-networking",
+        "--disable-sync",
+        "--no-pings",
+        "--disable-default-apps",
+        "--disable-component-extensions-with-background-pages",
     ]
     logger.info(f"Launching browser: profile={profile_path} headless={headless} sadcaptcha={'yes' if sadcaptcha_api_key else 'no'}")
     print(f"  >> uc.start()...", flush=True)
