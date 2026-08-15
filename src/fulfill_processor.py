@@ -141,8 +141,9 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
 
         await _check_captcha(tab)
 
-        if await detect_post_recharge_redirect(tab, timeout=10):
-            logger.info("Page redirected after recharge — waiting for manual email confirm")
+        logger.info("Checking for post-recharge redirect...")
+        if await detect_post_recharge_redirect(tab, timeout=30):
+            logger.info("Page redirected after recharge — waiting for banking app confirmation")
             returned = await wait_for_post_recharge_return(
                 tab,
                 timeout_minutes=request.payment_confirm_timeout_minutes,

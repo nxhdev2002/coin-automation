@@ -91,20 +91,26 @@ async def click_recharge(tab) -> bool:
     ok = await click_element_js(tab, selector)
     await human_sleep(3, 5)
     logger.info(f"Recharge button clicked: {ok}")
+    try:
+        url = await tab.evaluate("location.href")
+        url = parse_eval(url)
+        logger.info(f"[Recharge] Current URL after click: {url}")
+    except Exception:
+        pass
     return ok
 
 
-async def detect_post_recharge_redirect(tab, timeout: float = 10.0) -> bool:
+async def detect_post_recharge_redirect(tab, timeout: float = 30.0) -> bool:
     """After clicking recharge, check if the page redirected away from the wallet/coin page.
 
-    TikTok may redirect to an email confirmation page that requires manual action.
+    TikTok may redirect to a 3D Secure / email confirmation page that requires manual action.
     Returns True if a redirect is detected.
     """
     js = """
     (() => {
         const url = location.href;
-        if (!url.includes('/coin') && !url.includes('/wallet')) return 'redirected';
-        return 'same_page';
+        if (!url.includes('/coin') && !url.includes('/wallet')) return url;
+        return null;
     })()
     """
     elapsed = 0.0
@@ -112,18 +118,19 @@ async def detect_post_recharge_redirect(tab, timeout: float = 10.0) -> bool:
         try:
             result = await tab.evaluate(js)
             result = parse_eval(result)
-            if result == 'redirected':
+            if result and isinstance(result, str):
                 logger.info(f"[Recharge] Page redirected after recharge: {result}")
                 return True
         except Exception:
             pass
-        await asyncio.sleep(1)
-        elapsed += 1
+        await asyncio.sleep(2)
+        elapsed += 2
+    logger.info(f"[Recharge] No redirect detected after {timeout}s")
     return False
 
 
 async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_client=None, order_id: str = "") -> bool:
-    """Wait for the user to manually confirm email and return to the coin/wallet page.
+    """Wait for the user to manually confirm on banking app and return to the coin/wallet page.
 
     Polls the URL until it returns to /coin or /wallet, or until timeout.
     Updates the order phase if callback_client is provided.
@@ -133,6 +140,8 @@ async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_
             "fulfillmentPhase": "WaitingForVerification",
         })
 
+    logger.info(f"[Recharge] Waiting up to {timeout_minutes}m for banking app confirmation...")
+
     timeout_seconds = timeout_minutes * 60
     elapsed = 0.0
     while elapsed < timeout_seconds:
@@ -140,14 +149,16 @@ async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_
             result = await tab.evaluate("location.href")
             result = parse_eval(result)
             if isinstance(result, str) and ('/coin' in result or '/wallet' in result):
-                logger.info(f"[Recharge] Returned to coin/wallet page after manual confirm")
+                logger.info(f"[Recharge] Returned to coin/wallet page: {result}")
                 return True
+            if elapsed == 0 or elapsed % 30 == 0:
+                logger.info(f"[Recharge] Still waiting for confirmation... ({int(elapsed)}s elapsed, URL: {result})")
         except Exception:
             pass
         await asyncio.sleep(5)
         elapsed += 5
 
-    logger.warning(f"[Recharge] Timeout waiting for manual confirm ({timeout_minutes}m)")
+    logger.warning(f"[Recharge] Timeout waiting for banking confirmation ({timeout_minutes}m)")
     return False
 
 
