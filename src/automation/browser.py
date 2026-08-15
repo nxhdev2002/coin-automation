@@ -15,6 +15,12 @@ CHROMIUM_DIR = Path(os.environ.get("CHROMIUM_DIR", r"C:\coin-automation\chromium
 CHROMIUM_EXE = CHROMIUM_DIR / "chrome-win" / "chrome.exe"
 
 
+async def human_sleep(min_s: float = 1.0, max_s: float = 5.0):
+    """Random sleep to mimic human behavior and avoid anti-bot detection."""
+    delay = random.uniform(min_s, max_s)
+    await asyncio.sleep(delay)
+
+
 def _ensure_chromium() -> str:
     """Download Chromium if not present. Returns path to chrome.exe."""
     if CHROMIUM_EXE.exists():
