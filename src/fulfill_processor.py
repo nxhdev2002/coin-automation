@@ -225,6 +225,33 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 screenshot_path=screenshot,
             )
 
+        # After Pay Now, TikTok may redirect to a 3D Secure page where the
+        # card holder confirms the transaction on their banking app (up to 5 min).
+        logger.info("Checking for 3DS redirect after Pay Now...")
+        if await detect_post_recharge_redirect(tab, timeout=30):
+            logger.info("3DS redirect detected — waiting for banking app confirmation")
+            await core_client.update_order(request.order_id, {
+                "fulfillmentPhase": "WaitingForVerification",
+            })
+            returned = await wait_for_post_recharge_return(
+                tab,
+                timeout_minutes=request.payment_confirm_timeout_minutes,
+                callback_client=core_client,
+                order_id=request.order_id,
+            )
+            if not returned:
+                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+                return FulfillResult(
+                    success=False,
+                    failure_category="PaymentConfirmTimeout",
+                    failure_reason="Timeout waiting for banking app confirmation after Pay Now",
+                    screenshot_path=screenshot,
+                )
+            logger.info("Banking app confirmed — checking payment result")
+            await core_client.update_order(request.order_id, {
+                "fulfillmentPhase": "PurchasingCoins",
+            })
+
         result = await wait_for_payment_result(browser, tab, timeout_seconds=60)
         screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
 
