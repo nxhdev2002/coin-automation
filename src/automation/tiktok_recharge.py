@@ -6,6 +6,27 @@ from .browser import wait_for_element, click_element_js, parse_eval, human_sleep
 from .selectors import SELECTORS
 
 
+async def uncheck_invite_reward(tab) -> None:
+    """Uncheck the 'Invite & Get Rewards' checkbox if it exists and is checked."""
+    js = """
+    (() => {
+        const reward = document.querySelector('[data-e2e*="reward-item.invite"]');
+        if (!reward) return 'not-found';
+        const cb = reward.querySelector('input[type="checkbox"]');
+        if (!cb) return 'no-checkbox';
+        if (!cb.checked) return 'already-unchecked';
+        cb.click();
+        return 'unchecked';
+    })()
+    """
+    try:
+        result = await tab.evaluate(js)
+        result = parse_eval(result)
+        logger.info(f"[Reward] Invite reward: {result}")
+    except Exception as e:
+        logger.warning(f"[Reward] Failed to uncheck invite reward: {e}")
+
+
 async def select_custom_package(tab, coin_amount: int) -> bool:
     """Select the Custom package option and enter a custom coin amount (min 30)."""
     custom_selector = SELECTORS["wallet_package_custom"]
@@ -217,15 +238,17 @@ async def skip_link_card_prompt(tab) -> bool:
         logger.error("[SaveCard] CC/DC not the selected payment method — FAIL")
         return False
 
-    selector = '[data-e2e="payment-method-save-button"]'
+    selector = '[data-e2e="payment-method-item-ccdc"] [data-e2e="payment-method-save-button"]'
 
     if not await wait_for_element(tab, selector, timeout=5):
-        logger.error("[SaveCard] Save card toggle not found — FAIL")
+        logger.error("[SaveCard] Save card toggle not found within CC/DC — FAIL")
         return False
 
     check_js = """
     (() => {
-        const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+        const ccdc = document.querySelector('[data-e2e="payment-method-item-ccdc"]');
+        if (!ccdc) return { found: false, checked: null };
+        const el = ccdc.querySelector('[data-e2e="payment-method-save-button"]');
         if (!el) return { found: false, checked: null };
         const input = el.querySelector('input[type="checkbox"]');
         return { found: true, checked: input ? input.checked : null };
@@ -234,7 +257,9 @@ async def skip_link_card_prompt(tab) -> bool:
 
     uncheck_js = """
     (() => {
-        const el = document.querySelector('[data-e2e="payment-method-save-button"]');
+        const ccdc = document.querySelector('[data-e2e="payment-method-item-ccdc"]');
+        if (!ccdc) return 'no-ccdc';
+        const el = ccdc.querySelector('[data-e2e="payment-method-save-button"]');
         if (!el) return 'not-found';
         const input = el.querySelector('input[type="checkbox"]');
         if (input) { input.click(); return 'clicked-input'; }

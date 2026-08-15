@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from loguru import logger
 
@@ -49,22 +50,93 @@ async def detect_verification_prompt(tab) -> str | None:
         return None
 
 
+async def detect_verification_options(tab) -> list[str] | None:
+    """Extract all available verification options from the TikTok dialog.
+
+    Returns a list of option labels (e.g. ['+84****9741', 'Password']) or None.
+    Uses semantic class prefixes (pc-home-item-desc, pc-home-item-sub-desc) which
+    are stable across TikTok rebuilds, unlike the hashed suffixes.
+    """
+    js = """
+    (() => {
+        const dialog = document.querySelector('[data-testid="tux-web-modal"]');
+        if (!dialog) return null;
+        const descs = dialog.querySelectorAll('[class*="pc-home-item-desc-"]:not([class*="sub-desc"])');
+        const options = [];
+        for (const desc of descs) {
+            const label = (desc.innerText || '').trim();
+            const content = desc.closest('[class*="pc-home-item-content-"]');
+            const subDesc = content ? content.querySelector('[class*="pc-home-item-sub-desc-"]') : null;
+            const value = subDesc ? (subDesc.innerText || '').trim() : '';
+            const text = value || label;
+            if (text) options.push(text);
+        }
+        return options.length ? JSON.stringify(options) : null;
+    })()
+    """
+    try:
+        result = await tab.evaluate(js)
+        result = parse_eval(result)
+        logger.info(f"[Verify] detect_verification_options raw result: {result}")
+        if not result:
+            return None
+
+        if isinstance(result, str):
+            raw_options = json.loads(result)
+        elif isinstance(result, list):
+            raw_options = result
+        else:
+            logger.warning(f"[Verify] Unexpected result type: {type(result)}")
+            return None
+        targets = []
+        for text in raw_options:
+            email_match = re.search(r'([a-zA-Z0-9.*_-]+@[a-zA-Z0-9.*_-]+)', text)
+            if email_match:
+                targets.append(email_match.group(1))
+                continue
+            phone_match = re.search(r'(\+?\d*\*+\d+)', text)
+            if phone_match:
+                targets.append(phone_match.group(1))
+                continue
+            if text:
+                targets.append(text)
+
+        if not targets:
+            logger.warning(f"[Verify] Options found but no targets extracted: {raw_options}")
+            return None
+
+        logger.info(f"[Verify] Detected verification options: {targets}")
+        return targets
+    except Exception as e:
+        logger.warning(f"detect_verification_options error: {e}")
+        return None
+
+
 async def click_verification_option(tab, target: str | None = None) -> bool:
-    """Click the email/phone option in the verify dialog to reveal the code input.
+    """Click the email/phone/password option in the verify dialog to reveal the code input.
 
     If `target` is provided, clicks the option whose text contains that target
-    (e.g. 'x***c@gmail.com'). Otherwise clicks the first clickable option.
+    (e.g. '+84****9741', 'Password'). Otherwise clicks the first option.
     """
     target_js = target.replace("'", "\\'") if target else ""
     js = f"""
     (() => {{
         const dialog = document.querySelector('[data-testid="tux-web-modal"]');
         if (!dialog) return false;
-        const items = dialog.querySelectorAll('div[class*="pc-home-item-"]');
+        const descs = dialog.querySelectorAll('[class*="pc-home-item-desc-"]:not([class*="sub-desc"])');
         const target = '{target_js}';
-        for (const item of items) {{
-            if (window.getComputedStyle(item).cursor !== 'pointer') continue;
-            if (target && !item.innerText.includes(target)) continue;
+        for (const desc of descs) {{
+            let item = desc.parentElement;
+            while (item && item !== dialog) {{
+                const cls = item.className || '';
+                if (cls.includes('pc-home-item-') && !cls.includes('content') && !cls.includes('icon') && !cls.includes('arrow')) {{
+                    break;
+                }}
+                item = item.parentElement;
+            }}
+            if (!item || item === dialog) item = desc;
+            const fullText = (item.innerText || '').trim();
+            if (target && !fullText.includes(target)) continue;
             item.click();
             return true;
         }}
@@ -81,18 +153,24 @@ async def click_verification_option(tab, target: str | None = None) -> bool:
         return False
 
 
-async def fill_verification_code(tab, code: str) -> bool:
-    """Fill the 6-digit verification code and click Next."""
+async def fill_verification_code(tab, code: str, is_password: bool = False) -> bool:
+    """Fill the verification code/password and click submit.
+
+    If is_password=True, looks for a password input. Otherwise looks for a 6-digit OTP input.
+    """
+    input_selector = 'input[type="password"]' if is_password else 'input[placeholder*="6-digit" i]'
+    submit_texts = ['Next', 'Log in', 'Submit', 'Continue'] if is_password else ['Next']
+    code_escaped = code.replace("'", "\\'")
     js_fill = f"""
     (() => {{
         const dialog = document.querySelector('[data-testid="tux-web-modal"]');
         if (!dialog) return 'no dialog';
-        const input = dialog.querySelector('input[placeholder*="6-digit" i]');
+        const input = dialog.querySelector(`{input_selector}`);
         if (!input) return 'no input';
         const setter = Object.getOwnPropertyDescriptor(
             window.HTMLInputElement.prototype, 'value'
         ).set;
-        setter.call(input, '{code}');
+        setter.call(input, '{code_escaped}');
         input.dispatchEvent(new Event('input', {{bubbles: true}}));
         input.dispatchEvent(new Event('change', {{bubbles: true}}));
         input.dispatchEvent(new Event('blur', {{bubbles: true}}));
@@ -102,28 +180,33 @@ async def fill_verification_code(tab, code: str) -> bool:
     try:
         result = await tab.evaluate(js_fill)
         result = parse_eval(result)
-        logger.info(f"[Verify] Fill code result: {result}")
+        logger.info(f"[Verify] Fill {'password' if is_password else 'code'} result: {result}")
         if result != 'filled':
             return False
     except Exception as e:
-        logger.error(f"[Verify] Fill code error: {e}")
+        logger.error(f"[Verify] Fill error: {e}")
         return False
 
     await human_sleep(1, 2)
 
-    js_click = """
-    (() => {
+    submit_array = json.dumps(submit_texts)
+    js_click = f"""
+    (() => {{
         const dialog = document.querySelector('[data-testid="tux-web-modal"]');
         if (!dialog) return false;
+        const texts = {submit_array};
         const buttons = dialog.querySelectorAll('button');
-        for (const btn of buttons) {
-            if (btn.innerText.trim() === 'Next' && !btn.disabled) {
-                btn.click();
-                return true;
-            }
-        }
+        for (const btn of buttons) {{
+            const text = btn.innerText.trim();
+            for (const t of texts) {{
+                if (text === t && !btn.disabled) {{
+                    btn.click();
+                    return true;
+                }}
+            }}
+        }}
         return false;
-    })()
+    }})()
     """
     try:
         clicked = await tab.evaluate(js_click)

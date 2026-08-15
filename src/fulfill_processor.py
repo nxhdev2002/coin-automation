@@ -8,6 +8,7 @@ from .automation.tiktok_login import qr_login, check_logged_in
 from .automation.tiktok_recharge import (
     select_custom_package, click_recharge, select_add_card,
     skip_link_card_prompt, detect_post_recharge_redirect, wait_for_post_recharge_return,
+    uncheck_invite_reward,
 )
 from .automation.tiktok_payment import (
     fill_card_form, click_pay_now, wait_for_payment_result,
@@ -141,6 +142,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
             )
 
         await human_sleep(2, 4)
+        await uncheck_invite_reward(tab)
         selected = await select_custom_package(tab, request.coin_amount)
         if not selected:
             screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
@@ -234,7 +236,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         if await detect_post_recharge_redirect(tab, timeout=30):
             logger.info("3DS redirect detected — waiting for banking app confirmation")
             await core_client.update_order(request.order_id, {
-                "fulfillmentPhase": "WaitingForVerification",
+                "fulfillmentPhase": "WaitingForPaymentConfirm",
             })
             returned = await wait_for_post_recharge_return(
                 tab,

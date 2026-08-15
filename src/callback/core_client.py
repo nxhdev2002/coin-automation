@@ -54,12 +54,23 @@ class CoreClient:
     async def get_verification_code(self, order_id: str) -> str | None:
         try:
             resp = await self._client.get(f"/internal/coins/verification-code/{order_id}")
-            if resp.status_code == 204:
+            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
                 return None
             resp.raise_for_status()
-            return resp.json()
+            return resp.text.strip()
         except Exception as e:
             logger.error(f"get_verification_code failed: {e}")
+            return None
+
+    async def get_verification_option(self, order_id: str) -> str | None:
+        try:
+            resp = await self._client.get(f"/internal/coins/verification-option/{order_id}")
+            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
+                return None
+            resp.raise_for_status()
+            return resp.text.strip()
+        except Exception as e:
+            logger.error(f"get_verification_option failed: {e}")
             return None
 
     async def close(self):

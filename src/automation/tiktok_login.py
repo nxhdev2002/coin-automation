@@ -9,6 +9,7 @@ from .captcha_solver import detect_captcha, solve_captcha
 from ..config import get_settings
 from .tiktok_verify import (
     detect_verification_prompt,
+    detect_verification_options,
     click_verification_option,
     fill_verification_code,
     wait_for_verification_resolved,
@@ -156,10 +157,9 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
     last_qr_sent = None
 
     while datetime.now(timezone.utc) < deadline:
-        verify_target = await detect_verification_prompt(tab)
-        if verify_target:
-            logger.info(f"Verification popup detected in main loop: {verify_target}")
-            return await handle_verification(tab, callback_client, order_id, deadline, verify_target)
+        if await detect_verification_prompt(tab):
+            logger.info("Verification popup detected in main loop")
+            return await handle_verification(tab, callback_client, order_id, deadline)
 
         captcha_result = await solve_captcha(tab, settings)
         if captcha_result:
@@ -207,30 +207,58 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
 async def handle_verification(tab, callback_client, order_id: str, deadline, verify_target: str | None = None) -> bool:
     """Handle the post-QR verification step.
 
-    1. Detect verification target (masked email/phone)
-    2. Report to backend so frontend can show input
-    3. Poll backend for user-submitted code
-    4. Fill code + click Next
-    5. Wait for dialog to disappear
+    1. Detect all available verification options (email/phone)
+    2. Report options to backend so frontend can let user choose
+    3. Poll backend for user's selected option
+    4. Click selected option → code input appears
+    5. Poll backend for user-submitted code
+    6. Fill code + click Next
+    7. Wait for dialog to disappear
     """
     settings = get_settings()
-    if not verify_target:
-        verify_target = await detect_verification_prompt(tab)
-        if not verify_target:
-            logger.error("Verification dialog not found")
-            return False
 
-    logger.info(f"Verification target: {verify_target}")
+    # Extract all available verification options
+    if not verify_target:
+        options = await detect_verification_options(tab)
+        if not options:
+            # Fallback: try single-target detection
+            verify_target = await detect_verification_prompt(tab)
+            if not verify_target:
+                logger.error("Verification dialog not found")
+                return False
+            options = [verify_target]
+
+    logger.info(f"Verification options: {options}")
     await callback_client.update_order(order_id, {
         "fulfillmentPhase": "WaitingForVerification",
-        "verificationTarget": verify_target,
+        "verificationOptions": options,
     })
 
-    clicked = await click_verification_option(tab, verify_target)
+    # If only one option, auto-select it. Otherwise wait for user to choose.
+    if len(options) == 1:
+        selected_option = options[0]
+        logger.info(f"Only one verification option — auto-selecting: {selected_option}")
+    else:
+        logger.info(f"Multiple verification options — waiting for user to select one of: {options}")
+        option_deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+        selected_option = None
+        while datetime.now(timezone.utc) < option_deadline:
+            selected_option = await callback_client.get_verification_option(order_id)
+            if selected_option:
+                logger.info(f"User selected verification option: {selected_option}")
+                break
+            await asyncio.sleep(3)
+
+        if not selected_option:
+            logger.error("Timeout waiting for user to select verification option")
+            return False
+
+    # Click the selected option
+    clicked = await click_verification_option(tab, selected_option)
     if not clicked:
-        logger.error("Could not click verification option")
+        logger.error(f"Could not click verification option: {selected_option}")
         return False
-    logger.info("Clicked verification option — code input should appear")
+    logger.info(f"Clicked verification option: {selected_option} — input should appear")
     await human_sleep(1, 3)
 
     captcha_result = await solve_captcha(tab, settings)
@@ -240,14 +268,17 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
             return False
         logger.info(f"Captcha solved after verification click: {captcha_result}")
 
+    is_password = "password" in selected_option.lower()
+    logger.info(f"Verification type: {'password' if is_password else 'OTP code'}")
+
     poll_deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
     while datetime.now(timezone.utc) < poll_deadline:
         code = await callback_client.get_verification_code(order_id)
         if code:
-            logger.info(f"Verification code received: {code}")
-            filled = await fill_verification_code(tab, code)
+            logger.info(f"Verification {'password' if is_password else 'code'} received: {'***' if is_password else code}")
+            filled = await fill_verification_code(tab, code, is_password=is_password)
             if not filled:
-                logger.error("Failed to fill verification code")
+                logger.error(f"Failed to fill {'password' if is_password else 'verification code'}")
                 return False
 
             resolved = await wait_for_verification_resolved(tab, timeout=120)
