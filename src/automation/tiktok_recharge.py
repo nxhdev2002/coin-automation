@@ -30,7 +30,7 @@ async def uncheck_invite_reward(tab) -> None:
 async def select_custom_package(tab, coin_amount: int) -> bool:
     """Select the Custom package option and enter a custom coin amount (min 30)."""
     custom_selector = SELECTORS["wallet_package_custom"]
-    if not await wait_for_element(tab, custom_selector, timeout=10):
+    if not await wait_for_element(tab, custom_selector, timeout=30):
         logger.warning("Custom package option not found")
         return False
 
@@ -95,7 +95,7 @@ async def select_custom_package(tab, coin_amount: int) -> bool:
 
 async def click_recharge(tab) -> bool:
     selector = SELECTORS["wallet_buy_now_button"]
-    if not await wait_for_element(tab, selector, timeout=10):
+    if not await wait_for_element(tab, selector, timeout=30):
         logger.warning("Recharge button not found")
         return False
 
@@ -185,7 +185,7 @@ async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_
 
 async def select_add_card(tab) -> bool:
     selector = SELECTORS["payment_method_item_ccdc"]
-    if not await wait_for_element(tab, selector, timeout=10):
+    if not await wait_for_element(tab, selector, timeout=30):
         logger.warning("Add card option not found")
         return False
 
@@ -216,7 +216,7 @@ async def skip_link_card_prompt(tab) -> bool:
     """
     ccdc_selector = '[data-e2e="payment-method-item-ccdc"]'
 
-    if not await wait_for_element(tab, ccdc_selector, timeout=5):
+    if not await wait_for_element(tab, ccdc_selector, timeout=30):
         logger.error("[SaveCard] CC/DC payment method not found — FAIL")
         return False
 
@@ -240,7 +240,7 @@ async def skip_link_card_prompt(tab) -> bool:
 
     selector = '[data-e2e="payment-method-item-ccdc"] [data-e2e="payment-method-save-button"]'
 
-    if not await wait_for_element(tab, selector, timeout=5):
+    if not await wait_for_element(tab, selector, timeout=30):
         logger.error("[SaveCard] Save card toggle not found within CC/DC — FAIL")
         return False
 

@@ -243,6 +243,9 @@ async def wait_for_verification_resolved(tab, timeout: float = 120.0) -> bool:
                 logger.error(f"[Verify] Verification error: {result}")
                 return False
         except Exception as e:
+            if "no close frame" in str(e).lower() or "target closed" in str(e).lower() or "session closed" in str(e).lower():
+                logger.error(f"[Verify] Tab/browser closed: {e}")
+                return False
             logger.warning(f"[Verify] Poll error: {e}")
         await asyncio.sleep(1)
         elapsed += 1

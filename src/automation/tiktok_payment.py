@@ -191,7 +191,7 @@ async def fill_card_form(browser, tab, card_number: str, card_cvv: str,
 
 async def click_pay_now(tab) -> bool:
     selector = SELECTORS["cashier_footer_button"]
-    if not await wait_for_element(tab, selector, timeout=10):
+    if not await wait_for_element(tab, selector, timeout=30):
         logger.warning("Pay now button not found")
         return False
 

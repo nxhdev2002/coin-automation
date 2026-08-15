@@ -110,7 +110,7 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
     return browser
 
 
-async def wait_for_element(tab, selector: str, timeout: int = 10, poll_interval: float = 0.5) -> bool:
+async def wait_for_element(tab, selector: str, timeout: int = 30, poll_interval: float = 0.5) -> bool:
     """Poll via JS for an element to appear. Returns True if found, False on timeout."""
     js = f"""
     (() => {{

@@ -188,7 +188,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
                 screenshot_path=screenshot,
             )
 
-        iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=10)
+        iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=30)
         if not iframe_visible:
                 screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
                 return FulfillResult(

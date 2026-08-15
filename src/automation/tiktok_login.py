@@ -153,7 +153,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
     })
 
     await click_qr_login(tab)
-    await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=6)
+    await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=30)
 
     deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
     qr_refreshed_at = datetime.now(timezone.utc)
@@ -196,8 +196,9 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         if status == "qr_expired" or datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
             logger.info("QR expired, refreshing...")
             await tab.get(SELECTORS["login_url"])
+            await wait_for_element(tab, '[data-e2e="channel-item"]', timeout=30)
             await click_qr_login(tab)
-            await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=6)
+            await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=30)
             last_qr_sent = None
             qr_refreshed_at = datetime.now(timezone.utc)
 
