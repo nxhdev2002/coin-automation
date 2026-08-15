@@ -117,6 +117,17 @@ async def detect_login_success(tab) -> str:
                     logger.info(f"Verification prompt detected: {verify_target}")
                     return "verification"
 
+                if result == "qr_gone" and result2 == "qr_gone":
+                    try:
+                        url = await tab.evaluate("location.href")
+                        url = parse_eval(url) if not isinstance(url, str) else url
+                        body = await tab.evaluate("document.body.innerText.slice(0, 200)")
+                        body = parse_eval(body) if not isinstance(body, str) else body
+                        logger.info(f"[Login] QR gone — waiting for phone confirmation (URL: {url}, body: {body})")
+                    except Exception:
+                        logger.info("[Login] QR gone — waiting for phone confirmation")
+                    await asyncio.sleep(5)
+
             return "still_waiting"
         return "still_waiting"
     except Exception as e:

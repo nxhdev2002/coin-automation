@@ -141,28 +141,6 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
 
         await _check_captcha(tab)
 
-        logger.info("Checking for post-recharge redirect...")
-        if await detect_post_recharge_redirect(tab, timeout=30):
-            logger.info("Page redirected after recharge — waiting for banking app confirmation")
-            returned = await wait_for_post_recharge_return(
-                tab,
-                timeout_minutes=request.payment_confirm_timeout_minutes,
-                callback_client=core_client,
-                order_id=request.order_id,
-            )
-            if not returned:
-                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-                return FulfillResult(
-                    success=False,
-                    failure_category="PaymentConfirmTimeout",
-                    failure_reason="Timeout waiting for manual email confirmation after recharge",
-                    screenshot_path=screenshot,
-                )
-            logger.info("Manual confirm done — continuing with payment flow")
-            await core_client.update_order(request.order_id, {
-                "fulfillmentPhase": "PurchasingCoins",
-            })
-
         add_card_ok = await select_add_card(tab)
         if not add_card_ok:
             screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
