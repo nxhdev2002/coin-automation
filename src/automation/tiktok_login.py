@@ -229,7 +229,7 @@ async def handle_verification(tab, callback_client, order_id: str, deadline, ver
             return False
         logger.info(f"Captcha solved after verification click: {captcha_result}")
 
-    poll_deadline = min(deadline, datetime.now(timezone.utc) + timedelta(minutes=5))
+    poll_deadline = datetime.now(timezone.utc) + timedelta(minutes=2)
     while datetime.now(timezone.utc) < poll_deadline:
         code = await callback_client.get_verification_code(order_id)
         if code:
