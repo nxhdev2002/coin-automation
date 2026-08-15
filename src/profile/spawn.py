@@ -9,6 +9,7 @@ from loguru import logger
 from ..automation.browser import launch_browser
 from ..automation.tiktok_login import check_logged_in
 from ..concurrency.lock_manager import get_lock_manager
+from ..config import get_settings
 
 
 class ProfileNotFoundError(Exception):
@@ -77,7 +78,7 @@ class SpawnManager:
 
         browser = None
         try:
-            browser = await launch_browser(profile_path, headless=headless)
+            browser = await launch_browser(profile_path, headless=headless, sadcaptcha_api_key=get_settings().sadcaptcha_api_key)
             tab = await browser.get(url)
             logged_in = await check_logged_in(tab)
         except Exception:

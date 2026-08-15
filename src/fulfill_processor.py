@@ -89,7 +89,7 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         "fulfillmentPhase": "LaunchingBrowser",
     })
 
-    browser = await launch_browser(profile)
+    browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
 
     try:
         tab = await browser.get(SELECTORS["login_url"])

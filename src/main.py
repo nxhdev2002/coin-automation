@@ -64,9 +64,10 @@ async def load_settings() -> Settings:
                     logger.info(f"  {key} = {val}")
 
                 return Settings(
-                    core_api_url=secrets.get("CORE_API_URL", "https://localhost:44396"),
+                    core_api_url=secrets.get("CORE_API_URL", "https://api.vccus.net"),
                     core_api_key=secrets.get("CORE_API_KEY", "hoangdz2033"),
-                    two_captcha_api_key=secrets.get("TWO_CAPTCHA_API_KEY", ""),
+                    two_captcha_api_key=secrets.get("TWO_CAPTCHA_API_KEY", "e11ba3d2efe908bc276aedfed0c303bd"),
+                    sadcaptcha_api_key=secrets.get("SADCAPTCHA_API_KEY", ""),
                     profile_dir=secrets.get("PROFILE_DIR", r"C:\coin-automation\profiles"),
                     screenshot_dir=secrets.get("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
                     log_dir=secrets.get("LOG_DIR", r"C:\coin-automation\logs"),
@@ -91,7 +92,8 @@ async def load_settings() -> Settings:
     return Settings(
         core_api_url=os.getenv("CORE_API_URL", "https://localhost:44396"),
         core_api_key=os.getenv("CORE_API_KEY", "hoangdz2033@@"),
-        two_captcha_api_key=os.getenv("TWO_CAPTCHA_API_KEY", ""),
+        two_captcha_api_key=os.getenv("TWO_CAPTCHA_API_KEY", "e11ba3d2efe908bc276aedfed0c303bd"),
+        sadcaptcha_api_key=os.getenv("SADCAPTCHA_API_KEY", ""),
         profile_dir=os.getenv("PROFILE_DIR", r"C:\coin-automation\profiles"),
         screenshot_dir=os.getenv("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),

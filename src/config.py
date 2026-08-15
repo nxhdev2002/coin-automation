@@ -5,6 +5,7 @@ class Settings(BaseModel):
     core_api_url: str = ""
     core_api_key: str = ""
     two_captcha_api_key: str = ""
+    sadcaptcha_api_key: str = ""
     profile_dir: str = r"C:\coin-automation\profiles"
     screenshot_dir: str = r"C:\coin-automation\screenshots"
     log_dir: str = r"C:\coin-automation\logs"

@@ -1,31 +1,73 @@
 import asyncio
 import os
+import io
 import random
 import sys
+import zipfile
+import shutil
+from pathlib import Path
+
 import nodriver as uc
 from loguru import logger
 
 
-async def human_sleep(min_s: float = 1.0, max_s: float = 5.0):
-    """Random sleep to mimic human behavior and avoid anti-bot detection."""
-    delay = random.uniform(min_s, max_s)
-    await asyncio.sleep(delay)
+CHROMIUM_DIR = Path(os.environ.get("CHROMIUM_DIR", r"C:\coin-automation\chromium"))
+CHROMIUM_EXE = CHROMIUM_DIR / "chrome-win" / "chrome.exe"
 
 
-async def launch_browser(profile_path: str, headless: bool = False):
+def _ensure_chromium() -> str:
+    """Download Chromium if not present. Returns path to chrome.exe."""
+    if CHROMIUM_EXE.exists():
+        return str(CHROMIUM_EXE)
+
+    logger.info(f"[CHROMIUM] Not found at {CHROMIUM_EXE}, downloading...")
+    import requests
+
+    resp = requests.get(
+        "https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/LAST_CHANGE",
+        timeout=15,
+    )
+    resp.raise_for_status()
+    revision = resp.text.strip()
+    logger.info(f"[CHROMIUM] Latest revision: {revision}")
+
+    zip_url = (
+        f"https://storage.googleapis.com/chromium-browser-snapshots/"
+        f"Win_x64/{revision}/chrome-win.zip"
+    )
+    logger.info(f"[CHROMIUM] Downloading from {zip_url}...")
+    resp = requests.get(zip_url, timeout=300, stream=True)
+    resp.raise_for_status()
+
+    CHROMIUM_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = CHROMIUM_DIR / "chrome-win.zip"
+    with open(zip_path, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    logger.info(f"[CHROMIUM] Extracting...")
+    with zipfile.ZipFile(zip_path) as zf:
+        zf.extractall(CHROMIUM_DIR)
+    zip_path.unlink()
+
+    if not CHROMIUM_EXE.exists():
+        raise RuntimeError(f"[CHROMIUM] Extraction failed — {CHROMIUM_EXE} not found")
+
+    logger.info(f"[CHROMIUM] Ready: {CHROMIUM_EXE}")
+    return str(CHROMIUM_EXE)
+
+
+async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_api_key: str = ""):
     os.makedirs(profile_path, exist_ok=True)
     args = [
         "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-infobars",
-        # Force English so TikTok's text (error messages, "Minimum: N" hints)
-        # stays matchable — the text-based checks have Vietnamese fallbacks, but
-        # other account languages would slip through them.
         "--lang=en-US",
         "--accept-lang=en-US,en",
     ]
-    logger.info(f"Launching browser: profile={profile_path} headless={headless}")
+    logger.info(f"Launching browser: profile={profile_path} headless={headless} sadcaptcha={'yes' if sadcaptcha_api_key else 'no'}")
     print(f"  >> uc.start()...", flush=True)
 
     kwargs = {
@@ -36,7 +78,20 @@ async def launch_browser(profile_path: str, headless: bool = False):
     if headless:
         kwargs["headless"] = True
 
-    browser = await uc.start(**kwargs)
+    if sadcaptcha_api_key:
+        try:
+            chromium_path = _ensure_chromium()
+            kwargs["browser_executable_path"] = chromium_path
+            from tiktok_captcha_solver.launcher import make_nodriver_solver
+            browser = await make_nodriver_solver(sadcaptcha_api_key, **kwargs)
+            logger.info("[SADCAPTCHA] Extension loaded — captchas will be auto-solved")
+        except Exception as e:
+            logger.warning(f"[SADCAPTCHA] Failed: {e} — falling back to normal browser")
+            kwargs.pop("browser_executable_path", None)
+            browser = await uc.start(**kwargs)
+    else:
+        browser = await uc.start(**kwargs)
+
     print(f"  >> browser started!", flush=True)
     return browser
 
