@@ -122,6 +122,9 @@ async def detect_login_success(tab) -> str:
                     try:
                         url = await tab.evaluate("location.href")
                         url = parse_eval(url) if not isinstance(url, str) else url
+                        if "/login" in url and "qrcode" not in url:
+                            logger.info("[Login] QR gone but still on login page — QR likely expired, will refresh")
+                            return "qr_expired"
                         body = await tab.evaluate("document.body.innerText.slice(0, 200)")
                         body = parse_eval(body) if not isinstance(body, str) else body
                         logger.info(f"[Login] QR gone — waiting for phone confirmation (URL: {url}, body: {body})")
@@ -190,8 +193,8 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
             logger.info("Verification required — entering verify flow")
             return await handle_verification(tab, callback_client, order_id, deadline)
 
-        if datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
-            logger.info("QR likely expired, refreshing...")
+        if status == "qr_expired" or datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
+            logger.info("QR expired, refreshing...")
             await tab.get(SELECTORS["login_url"])
             await click_qr_login(tab)
             await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=6)
