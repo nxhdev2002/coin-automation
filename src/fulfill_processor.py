@@ -113,9 +113,34 @@ async def _do_fulfill(request: FulfillRequest, core_client: CoreClient, settings
         })
 
         tab = await browser.get(SELECTORS["recharge_url"])
-        await _check_captcha(tab)
         await human_sleep(3, 5)
+        await _check_captcha(tab)
 
+        # Verify we're actually on the coin/wallet page
+        for attempt in range(3):
+            try:
+                current_url = await tab.evaluate("location.href")
+                current_url = parse_eval(current_url) if not isinstance(current_url, str) else current_url
+                logger.info(f"Current URL after navigation (attempt {attempt + 1}): {current_url}")
+                if "/coin" in current_url or "/wallet" in current_url:
+                    break
+                logger.warning(f"Not on coin/wallet page (URL: {current_url}) — retrying navigation")
+            except Exception as e:
+                logger.warning(f"URL check failed: {e}")
+            await human_sleep(1, 2)
+            tab = await browser.get(SELECTORS["recharge_url"])
+            await human_sleep(3, 5)
+            await _check_captcha(tab)
+        else:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="NavigationFailed",
+                failure_reason=f"Could not navigate to coin page after 3 attempts (stuck at {current_url})",
+                screenshot_path=screenshot,
+            )
+
+        await human_sleep(2, 4)
         selected = await select_custom_package(tab, request.coin_amount)
         if not selected:
             screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
