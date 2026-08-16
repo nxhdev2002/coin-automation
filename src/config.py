@@ -12,7 +12,7 @@ class Settings(BaseModel):
     state_dir: str = r"C:\coin-automation\state"
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-    ip_check_interval_minutes: int = 5
+    ip_check_interval_minutes: int = 1
     max_concurrent_browsers: int = 3
     qr_timeout_minutes: int = 5
     # hard ceiling for one whole fulfillment; <= 0 disables

@@ -158,7 +158,7 @@ async def wait_for_post_recharge_return(tab, timeout_minutes: int = 5, callback_
     """
     if callback_client and order_id:
         await callback_client.update_order(order_id, {
-            "fulfillmentPhase": "WaitingForVerification",
+            "fulfillmentPhase": "WaitingForPaymentConfirm",
         })
 
     logger.info(f"[Recharge] Waiting up to {timeout_minutes}m for banking app confirmation...")
