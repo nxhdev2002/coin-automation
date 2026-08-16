@@ -344,11 +344,10 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
                 )
 
         if is_new_account:
-            # fetch_identity reads wallet-user-name/profile-icon, which only exist
-            # on /coin — qr_login leaves `tab` on the login page after scan, so
-            # without this navigation every identity read comes back null.
+            logger.info("Login succeeded — waiting for page to settle before fetching identity")
+            await human_sleep(5, 8)
             tab = await browser.get(SELECTORS["recharge_url"])
-            await human_sleep(3, 5)
+            await human_sleep(5, 8)
             identity = await fetch_identity(tab)
             username = identity.get("display_name") or f"tiktok-{request.order_id[:8]}"
             profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile)
