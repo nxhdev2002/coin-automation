@@ -106,6 +106,10 @@ async def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         ip_check_interval_minutes=int(os.getenv("IP_CHECK_INTERVAL_MINUTES", "5")),
         warm_pool_size=int(os.getenv("WARM_POOL_SIZE", "1")),
+        es_uri=os.getenv("ES_URI", ""),
+        es_username=os.getenv("ES_USERNAME", ""),
+        es_password=os.getenv("ES_PASSWORD", ""),
+        es_index_format=os.getenv("ES_INDEX_FORMAT", "coin-automation-logs"),
     )
 
 

@@ -11,6 +11,15 @@ ORDER_LOG_FIELDS = (
     "order_status",
 )
 
+# Ad-hoc metric fields set via logger.bind(...) at individual log call sites
+# (not carried by the order context) — also promoted into the ELK document so
+# they're queryable/aggregatable in Kibana instead of buried in free-text messages.
+TIMING_LOG_FIELDS = (
+    "browser_ready_seconds",
+    "warm_pool_hit",
+    "qr_ready_seconds",
+)
+
 _order_context: ContextVar[dict[str, str] | None] = ContextVar(
     "coin_order_log_context", default=None
 )

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
@@ -198,12 +199,16 @@ async def fetch_identity(tab) -> dict:
         return {"display_name": None, "avatar_url": None}
 
 
-async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5) -> bool:
+async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5, flow_started_at: float | None = None) -> bool:
     """Run the QR login flow.
 
     Assumes the caller has already navigated `tab` to the login page and
     confirmed the account isn't logged in — this function does not
     re-navigate there, to avoid loading the login page twice.
+
+    `flow_started_at` (a `time.monotonic()` stamp from the caller) is optional
+    and only used to log how long the first QR code took to become visible —
+    passing nothing just skips that log line.
     """
     logger.info("Starting QR login flow")
     settings = get_settings()
@@ -232,6 +237,11 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
 
         qr_b64 = await get_qr_element_screenshot(tab)
         if qr_b64 and qr_b64 != last_qr_sent:
+            if last_qr_sent is None and flow_started_at is not None:
+                qr_ready_seconds = round(time.monotonic() - flow_started_at, 2)
+                logger.bind(qr_ready_seconds=qr_ready_seconds).info(
+                    f"[QR Timing] QR code ready to scan in {qr_ready_seconds}s"
+                )
             qr_expires = datetime.now(timezone.utc) + timedelta(seconds=90)
             await callback_client.update_account_link(order_id, {
                 "qrCodeBase64": qr_b64,

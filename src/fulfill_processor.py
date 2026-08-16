@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 from loguru import logger
 
@@ -319,6 +320,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
     """QR login only — used both to add a brand-new account (then identify + link
     it) and to re-establish a stale session on an existing profile. No purchase."""
     is_new_account = not request.profile_path
+    flow_started_at = time.monotonic()
 
     await core_client.update_account_link(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",
@@ -334,13 +336,24 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
         profile = request.profile_path or profile_path(settings.profile_dir, request.order_id)
         browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
 
+    browser_ready_seconds = round(time.monotonic() - flow_started_at, 2)
+    logger.bind(browser_ready_seconds=browser_ready_seconds, warm_pool_hit=warm is not None).info(
+        f"[QR Timing] Browser ready in {browser_ready_seconds}s (warm_pool_hit={warm is not None})"
+    )
+
     try:
         if is_new_account:
             # A brand-new profile has no session to check — the recharge_url
             # round-trip below (navigate + sleep + check_logged_in) always
             # resolves to "not logged in" here, so skip straight to QR login.
+            # A fresh profile's first-ever navigation is cold (no cached JS/TLS
+            # session from a prior tiktok.com visit), so — unlike the re-login
+            # branch below, which arrives here already warmed up by the
+            # recharge_url load — explicitly wait for the login channel list to
+            # render before qr_login's click, instead of racing it.
             tab = await browser.get(SELECTORS["login_url"])
-            logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
+            await wait_for_element(tab, SELECTORS["qr_channel_item"], timeout=15)
+            logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
         else:
             tab = await browser.get(SELECTORS["recharge_url"])
             await human_sleep(3, 5)
@@ -348,7 +361,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             logged_in = await check_logged_in(tab)
             if not logged_in:
                 tab = await browser.get(SELECTORS["login_url"])
-                logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
+                logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
 
         if not logged_in:
             screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
