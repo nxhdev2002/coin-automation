@@ -1,7 +1,7 @@
 import sys
 from loguru import logger
 
-from .logging_context import ORDER_LOG_FIELDS, TIMING_LOG_FIELDS, patch_record
+from .logging_context import ORDER_LOG_FIELDS, METRIC_LOG_FIELDS, patch_record
 
 
 def build_log_document(record) -> dict:
@@ -19,7 +19,7 @@ def build_log_document(record) -> dict:
         "line": record["line"],
         "namespace": "VCCUS-CoinAutomation",
     }
-    for key in ORDER_LOG_FIELDS + TIMING_LOG_FIELDS:
+    for key in ORDER_LOG_FIELDS + METRIC_LOG_FIELDS:
         value = record["extra"].get(key)
         if value not in (None, ""):
             doc[key] = value

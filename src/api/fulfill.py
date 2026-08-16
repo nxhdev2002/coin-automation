@@ -44,7 +44,7 @@ async def _fulfill_and_report(request: FulfillRequest):
         if result.success:
             drain_mgr.mark_fulfilled(request.order_id)
 
-        logger.info(
+        logger.bind(order_success=result.success, failure_category=result.failure_category or "").info(
             f"Request {request.order_id} finished: success={result.success} "
             f"category={result.failure_category or '-'} reason={result.failure_reason or '-'}"
         )
@@ -70,7 +70,9 @@ async def _fulfill_and_report(request: FulfillRequest):
     except Exception as e:
         import traceback
         set_order_status("Error")
-        logger.error(f"Background fulfillment error for {request.order_id}: {e}")
+        logger.bind(order_success=False, failure_category="Unknown").error(
+            f"Background fulfillment error for {request.order_id}: {e}"
+        )
         logger.error(traceback.format_exc())
         try:
             if is_login_only:
