@@ -9,6 +9,7 @@ from pathlib import Path
 
 import nodriver as uc
 from loguru import logger
+from nodriver.core.util import ProxyForwarder
 
 
 CHROMIUM_DIR = Path(os.environ.get("CHROMIUM_DIR", r"C:\coin-automation\chromium"))
@@ -63,7 +64,7 @@ def _ensure_chromium() -> str:
     return str(CHROMIUM_EXE)
 
 
-async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_api_key: str = ""):
+async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_api_key: str = "", disable_images: bool = False, proxy_url: str = ""):
     os.makedirs(profile_path, exist_ok=True)
     args = [
         "--disable-blink-features=AutomationControlled",
@@ -80,7 +81,21 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
         "--disable-default-apps",
         "--disable-component-extensions-with-background-pages",
     ]
-    logger.info(f"Launching browser: profile={profile_path} headless={headless} sadcaptcha={'yes' if sadcaptcha_api_key else 'no'}")
+    if disable_images:
+        args.extend([
+            "--blink-settings=imagesEnabled=false",
+            "--disable-features=LazyImageLoading,MediaRouter,Translate",
+        ])
+
+    proxy_forwarder = None
+    if proxy_url:
+        # ProxyForwarder transparently handles authenticated proxies (user:pass@host:port)
+        # by spinning up a local unauthenticated forwarder Chrome can point --proxy-server
+        # at directly — Chrome itself can't carry inline credentials on that flag.
+        proxy_forwarder = ProxyForwarder(proxy_server=proxy_url)
+        args.append(f"--proxy-server={proxy_forwarder.proxy_server}")
+
+    logger.info(f"Launching browser: profile={profile_path} headless={headless} sadcaptcha={'yes' if sadcaptcha_api_key else 'no'} images={'off' if disable_images else 'on'} proxy={'yes' if proxy_url else 'no'}")
     print(f"  >> uc.start()...", flush=True)
 
     kwargs = {
@@ -104,6 +119,9 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
             browser = await uc.start(**kwargs)
     else:
         browser = await uc.start(**kwargs)
+
+    if proxy_forwarder is not None:
+        browser._proxy_forwarder = proxy_forwarder
 
     print(f"  >> browser started!", flush=True)
     return browser
@@ -139,6 +157,14 @@ async def close_browser(browser, grace_seconds: float = 3.0) -> None:
         browser.stop()
     except Exception:
         pass
+
+    proxy_forwarder = getattr(browser, "_proxy_forwarder", None)
+    if proxy_forwarder is not None and proxy_forwarder.server is not None:
+        try:
+            proxy_forwarder.server.close()
+            await proxy_forwarder.server.wait_closed()
+        except Exception:
+            pass
 
 
 async def wait_for_element(tab, selector: str, timeout: int = 30, poll_interval: float = 0.5) -> bool:

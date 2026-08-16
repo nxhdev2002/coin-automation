@@ -19,6 +19,7 @@ class FulfillRequest(BaseModel):
     card_expiry: str = ""
     card_holder_name: str = ""
     payment_confirm_timeout_minutes: int = 5
+    proxy_url: str = ""  # TopUp only; e.g. "http://user:pass@host:port" or "host:port"
 
 
 class FulfillResult(BaseModel):
