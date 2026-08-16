@@ -16,36 +16,44 @@ from .tiktok_verify import (
 )
 
 
-async def check_logged_in(tab, timeout: float = 6.0, poll_interval: float = 0.4) -> bool:
-    """Poll the page as soon as it loads, instead of a fixed sleep + single check.
+async def check_logged_in(tab, timeout: float = 30.0, poll_interval: float = 1.0) -> bool:
+    """Navigate to /coin and check if the user is logged in by looking for
+    the profile avatar/username on the coin page.
 
-    Returns as soon as the login state is determinable (usually well under
-    `timeout`), so an already-authenticated profile doesn't sit through a
-    fixed wait before we notice it's logged in.
+    Returns True if logged in, False if not.
     """
     js = """
     (() => {
-        const profile = document.querySelector('[data-e2e="profile-icon"]')
-                     || document.querySelector('[data-e2e="profile-avatar"]');
-        if (profile) return 'logged_in';
-        const loginBtn = document.querySelector('[data-e2e="top-login-button"]');
+        const iconEl = document.querySelector('[data-e2e="profile-icon"]')
+                    || document.querySelector('[data-e2e="profile-avatar"]')
+                    || document.querySelector('[data-e2e="avatar"]');
+        if (iconEl) return 'logged_in';
+        const nameEl = document.querySelector('[class*="wallet-user-name"]')
+                    || document.querySelector('[class*="user-name"]');
+        if (nameEl && nameEl.innerText && nameEl.innerText.trim()) return 'logged_in: ' + nameEl.innerText.trim();
+        const loginBtn = document.querySelector('[data-e2e="top-login-button"]')
+                      || document.querySelector('a[href*="/login"]');
         if (loginBtn) return 'not_logged_in';
-        return 'unknown';
+        const url = location.href;
+        if (url.includes('/login')) return 'not_logged_in';
+        return 'unknown: ' + url;
     })()
     """
     elapsed = 0.0
     while elapsed < timeout:
         try:
             result = await tab.evaluate(js)
+            logger.info(f"[Login] check_logged_in result: {result}")
         except Exception as e:
             logger.warning(f"check_logged_in evaluate failed: {type(e).__name__}: {e}")
             result = "unknown"
-        if result == "logged_in":
+        if isinstance(result, str) and result.startswith("logged_in"):
             return True
         if result == "not_logged_in":
             return False
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
+    logger.warning(f"check_logged_in timeout after {timeout}s — assuming not logged in")
     return False
 
 
