@@ -14,6 +14,9 @@ class Settings(BaseModel):
     telegram_chat_id: str = ""
     ip_check_interval_minutes: int = 1
     max_concurrent_browsers: int = 3
+    # Number of Chrome instances kept pre-launched (empty profile) for the
+    # new-account QR login path, to skip Chrome's cold-start latency. 0 disables.
+    warm_pool_size: int = 1
     qr_timeout_minutes: int = 5
     # hard ceiling for one whole fulfillment; <= 0 disables
     order_timeout_minutes: float = 15
