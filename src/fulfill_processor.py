@@ -99,7 +99,8 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
     browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
 
     try:
-        tab = await browser.get(SELECTORS["login_url"])
+        tab = await browser.get(SELECTORS["recharge_url"])
+        await human_sleep(3, 5)
 
         logged_in = await check_logged_in(tab)
         if not logged_in:
@@ -326,10 +327,12 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
     browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
 
     try:
-        tab = await browser.get(SELECTORS["login_url"])
+        tab = await browser.get(SELECTORS["recharge_url"])
+        await human_sleep(3, 5)
 
         logged_in = await check_logged_in(tab)
         if not logged_in:
+            tab = await browser.get(SELECTORS["login_url"])
             logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes)
             if not logged_in:
                 screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)

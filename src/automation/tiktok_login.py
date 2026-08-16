@@ -17,26 +17,39 @@ from .tiktok_verify import (
 
 
 async def check_logged_in(tab, timeout: float = 30.0, poll_interval: float = 1.0) -> bool:
-    """Navigate to /coin and check if the user is logged in by looking for
-    the profile avatar/username on the coin page.
+    """Check if the user is logged in by looking for profile indicators on the page.
 
     Returns True if logged in, False if not.
     """
     js = """
     (() => {
+        if (document.readyState !== 'complete') return 'loading';
+
         const iconEl = document.querySelector('[data-e2e="profile-icon"]')
                     || document.querySelector('[data-e2e="profile-avatar"]')
                     || document.querySelector('[data-e2e="avatar"]');
-        if (iconEl) return 'logged_in';
+        if (iconEl) return 'logged_in: icon';
+
         const nameEl = document.querySelector('[class*="wallet-user-name"]')
                     || document.querySelector('[class*="user-name"]');
-        if (nameEl && nameEl.innerText && nameEl.innerText.trim()) return 'logged_in: ' + nameEl.innerText.trim();
-        const loginBtn = document.querySelector('[data-e2e="top-login-button"]')
-                      || document.querySelector('a[href*="/login"]');
-        if (loginBtn) return 'not_logged_in';
+        if (nameEl && nameEl.innerText && nameEl.innerText.trim()) return 'logged_in: name=' + nameEl.innerText.trim();
+
+        const uploadLink = document.querySelector('a[href*="tiktokstudio/upload"]');
+        if (uploadLink) return 'logged_in: upload-link';
+
+        const inboxBtn = document.querySelector('[data-e2e="inbox-entry"]');
+        if (inboxBtn) return 'logged_in: inbox';
+
+        const loginBtn = document.querySelector('[data-e2e="top-login-button"]');
+        if (loginBtn) return 'not_logged_in: login-btn';
+
         const url = location.href;
-        if (url.includes('/login')) return 'not_logged_in';
-        return 'unknown: ' + url;
+        if (url.includes('/login')) return 'not_logged_in: url=/login';
+
+        const body = document.body ? document.body.innerText.slice(0, 200) : '';
+        if (body.includes('Log in') || body.includes('Đăng nhập')) return 'not_logged_in: login-text';
+
+        return 'unknown: url=' + url + ' body=' + body.slice(0, 100);
     })()
     """
     elapsed = 0.0
@@ -46,10 +59,10 @@ async def check_logged_in(tab, timeout: float = 30.0, poll_interval: float = 1.0
             logger.info(f"[Login] check_logged_in result: {result}")
         except Exception as e:
             logger.warning(f"check_logged_in evaluate failed: {type(e).__name__}: {e}")
-            result = "unknown"
+            result = "loading"
         if isinstance(result, str) and result.startswith("logged_in"):
             return True
-        if result == "not_logged_in":
+        if isinstance(result, str) and result.startswith("not_logged_in"):
             return False
         await asyncio.sleep(poll_interval)
         elapsed += poll_interval
