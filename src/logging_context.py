@@ -20,6 +20,7 @@ METRIC_LOG_FIELDS = (
     "qr_ready_seconds",
     "order_success",
     "failure_category",
+    "hit_3ds",
 )
 
 _order_context: ContextVar[dict[str, str] | None] = ContextVar(

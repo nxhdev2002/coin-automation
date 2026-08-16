@@ -241,7 +241,7 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
         # card holder confirms the transaction on their banking app (up to 5 min).
         logger.info("Checking for 3DS redirect after Pay Now...")
         if await detect_post_recharge_redirect(tab, timeout=30):
-            logger.info("3DS redirect detected — waiting for banking app confirmation")
+            logger.bind(hit_3ds=True).info("3DS redirect detected — waiting for banking app confirmation")
             await core_client.update_order(request.order_id, {
                 "fulfillmentPhase": "WaitingForPaymentConfirm",
             })
