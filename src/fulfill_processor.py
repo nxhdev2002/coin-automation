@@ -3,7 +3,7 @@ import time
 
 from loguru import logger
 
-from .automation.browser import launch_browser, close_browser, wait_for_element, human_sleep, parse_eval
+from .automation.browser import launch_browser, close_browser, wait_for_element, human_sleep, parse_eval, get_with_retry
 from .automation.captcha_solver import detect_captcha, solve_captcha
 from .automation.tiktok_login import qr_login, check_logged_in, fetch_identity
 from .automation.tiktok_recharge import (
@@ -21,7 +21,7 @@ from .callback.core_client import CoreClient
 from .config import get_settings
 from .concurrency.lock_manager import get_lock_manager
 from .models.fulfill import FulfillRequest, FulfillResult
-from .profile.paths import profile_path
+from .profile.paths import profile_path, graduate_profile
 
 
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
@@ -351,16 +351,16 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             # branch below, which arrives here already warmed up by the
             # recharge_url load — explicitly wait for the login channel list to
             # render before qr_login's click, instead of racing it.
-            tab = await browser.get(SELECTORS["login_url"])
+            tab = await get_with_retry(browser, SELECTORS["login_url"])
             await wait_for_element(tab, SELECTORS["qr_channel_item"], timeout=15)
             logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
         else:
-            tab = await browser.get(SELECTORS["recharge_url"])
+            tab = await get_with_retry(browser, SELECTORS["recharge_url"])
             await human_sleep(3, 5)
 
             logged_in = await check_logged_in(tab)
             if not logged_in:
-                tab = await browser.get(SELECTORS["login_url"])
+                tab = await get_with_retry(browser, SELECTORS["login_url"])
                 logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
 
         if not logged_in:
@@ -375,10 +375,19 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
         if is_new_account:
             logger.info("Login succeeded — waiting for page to settle before fetching identity")
             await human_sleep(5, 8)
-            tab = await browser.get(SELECTORS["recharge_url"])
+            tab = await get_with_retry(browser, SELECTORS["recharge_url"])
             await human_sleep(5, 8)
             identity = await fetch_identity(tab)
             username = identity.get("display_name") or f"tiktok-{request.order_id[:8]}"
+
+            if warm is not None:
+                # Chrome must release its handles on the profile dir before it
+                # can be moved — close it now instead of waiting for the
+                # outer `finally` (which still runs afterward, harmlessly, on
+                # an already-closed browser).
+                await close_browser(browser)
+                profile = graduate_profile(profile, settings.profile_dir, request.order_id)
+
             profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile)
             profile_id = profile_record.get("id")
             await core_client.update_tiktok_profile(profile_id, {

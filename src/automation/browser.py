@@ -22,6 +22,27 @@ async def human_sleep(min_s: float = 1.0, max_s: float = 5.0):
     await asyncio.sleep(delay)
 
 
+async def get_with_retry(browser, url: str, retries: int = 1):
+    """`browser.get(url)`, retrying once on a transient CDP handshake timeout.
+
+    nodriver opens a fresh CDP websocket per tab the first time it's used; under
+    concurrent browser load (multiple Chrome instances launching/navigating at
+    once) that handshake can occasionally miss its timeout window even though
+    the browser process itself is healthy (`TimeoutError: timed out during
+    opening handshake`, seen in production). A bare retry clears it without
+    failing the whole order — only that specific error is retried, anything
+    else propagates immediately.
+    """
+    for attempt in range(retries + 1):
+        try:
+            return await browser.get(url)
+        except TimeoutError as e:
+            if attempt >= retries or "opening handshake" not in str(e):
+                raise
+            logger.warning(f"CDP handshake timeout navigating to {url}, retrying ({attempt + 1}/{retries})")
+            await asyncio.sleep(1)
+
+
 def _ensure_chromium() -> str:
     """Download Chromium if not present. Returns path to chrome.exe."""
     if CHROMIUM_EXE.exists():

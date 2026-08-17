@@ -14,6 +14,7 @@ from .api.ip_monitor import router as ip_router
 from .api.profile import router as profile_router
 from .monitor.ip_watcher import get_ip_watcher
 from .profile.spawn import get_spawn_manager
+from .profile.cache_cleaner import get_profile_cache_cleaner
 from .automation.browser_pool import get_warm_pool
 
 
@@ -82,6 +83,7 @@ async def load_settings() -> Settings:
                     order_timeout_minutes=float(secrets.get("ORDER_TIMEOUT_MINUTES", "15")),
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
                     spawn_ttl_minutes=int(secrets.get("SPAWN_TTL_MINUTES", "30")),
+                    profile_cache_cleanup_interval_minutes=int(secrets.get("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
                     es_uri=secrets.get("ELASTICSEARCH.URI", ""),
                     es_username=secrets.get("ELASTICSEARCH.USERNAME", ""),
                     es_password=secrets.get("ELASTICSEARCH.PASSWORD", ""),
@@ -101,6 +103,7 @@ async def load_settings() -> Settings:
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),
         state_dir=os.getenv("STATE_DIR", r"C:\coin-automation\state"),
         spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
+        profile_cache_cleanup_interval_minutes=int(os.getenv("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
         order_timeout_minutes=float(os.getenv("ORDER_TIMEOUT_MINUTES", "15")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
@@ -138,10 +141,13 @@ async def lifespan(app: FastAPI):
         get_warm_pool(settings)
         logger.info(f"Warm browser pool started (size={settings.warm_pool_size})")
 
+    get_profile_cache_cleaner().start()
+
     logger.info(f"Coin Automation Service started — API: {settings.core_api_url}")
 
     yield
 
+    await get_profile_cache_cleaner().stop()
     await get_ip_watcher().stop()
 
     if settings.warm_pool_size > 0:

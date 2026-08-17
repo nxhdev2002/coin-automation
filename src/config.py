@@ -22,6 +22,9 @@ class Settings(BaseModel):
     order_timeout_minutes: float = 15
     captcha_max_retries: int = 3
     spawn_ttl_minutes: int = 30
+    # How often to strip Chrome's disposable cache dirs (Cache/Code Cache/
+    # GPUCache) out of stored profiles to save disk. <= 0 disables.
+    profile_cache_cleanup_interval_minutes: int = 60
     es_uri: str = ""
     es_username: str = ""
     es_password: str = ""
