@@ -15,6 +15,8 @@ class SpawnProfileRequest(BaseModel):
     headless: bool = False
     ttl_minutes: int = Field(default=0, ge=0, description="0 = use SPAWN_TTL_MINUTES")
     create_if_missing: bool = False
+    session_cookies_json: str = ""
+    tiktok_profile_id: str = ""
 
 
 class SpawnProfileResult(BaseModel):

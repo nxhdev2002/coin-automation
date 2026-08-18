@@ -1,6 +1,5 @@
 import asyncio
 import json
-import shutil
 import time
 
 from loguru import logger
@@ -27,43 +26,7 @@ from .config import get_settings
 from .concurrency.lock_manager import get_lock_manager
 from .models.fulfill import FulfillRequest, FulfillResult
 from .profile.paths import profile_path, graduate_profile
-
-
-async def _launch_from_cookies_or_profile(settings, order_id: str, profile_path_value: str, session_cookies_json: str, **launch_kwargs):
-    """Launch a browser for an existing account: from stored session cookies into a
-    throwaway ephemeral profile if available, else the legacy persistent profile dir
-    (until this account's cookies have been migrated). Returns (browser, profile, is_ephemeral)."""
-    if session_cookies_json:
-        profile = profile_path(settings.profile_dir, f"_ephemeral_{order_id}")
-        browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key, **launch_kwargs)
-        try:
-            await inject_cookies(browser, json.loads(session_cookies_json))
-        except Exception as e:
-            logger.warning(f"Cookie injection failed for order {order_id}, proceeding without: {e}")
-        return browser, profile, True
-
-    profile = profile_path_value or profile_path(settings.profile_dir, order_id)
-    browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key, **launch_kwargs)
-    return browser, profile, False
-
-
-async def _teardown_session_browser(browser, profile: str, tiktok_profile_id: str, core_client, is_ephemeral: bool, refresh_cookies: bool) -> None:
-    """Refresh stored cookies before closing when the session was confirmed valid this run —
-    this is also how an account still on its legacy persistent profile dir opportunistically
-    migrates to cookie storage the next time it's used (no separate migration script needed).
-    Then close the browser, and for a throwaway ephemeral profile, delete its directory."""
-    if refresh_cookies and tiktok_profile_id:
-        try:
-            fresh_cookies = await export_cookies(browser)
-            await core_client.update_tiktok_profile(tiktok_profile_id, {"sessionCookiesJson": json.dumps(fresh_cookies)})
-        except Exception as e:
-            logger.warning(f"Could not refresh stored cookies for profile {tiktok_profile_id}: {e}")
-    try:
-        await close_browser(browser)
-    except Exception:
-        pass
-    if is_ephemeral:
-        shutil.rmtree(profile, ignore_errors=True)
+from .profile.session_launch import launch_from_cookies_or_profile, teardown_session_browser
 
 
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
@@ -139,7 +102,7 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
         "fulfillmentPhase": "LaunchingBrowser",
     })
 
-    browser, profile, is_ephemeral = await _launch_from_cookies_or_profile(
+    browser, profile, is_ephemeral = await launch_from_cookies_or_profile(
         settings, request.order_id, request.profile_path, request.session_cookies_json,
         disable_images=True, proxy_url=request.proxy_url,
     )
@@ -356,7 +319,7 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
             )
 
     finally:
-        await _teardown_session_browser(browser, profile, request.tiktok_profile_id, core_client, is_ephemeral, refresh_cookies)
+        await teardown_session_browser(browser, profile, request.tiktok_profile_id, core_client, is_ephemeral, refresh_cookies)
 
 
 async def _do_login_only(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
@@ -379,7 +342,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
     if warm is not None:
         browser, profile = warm
     elif not is_new_account and request.session_cookies_json:
-        browser, profile, is_ephemeral = await _launch_from_cookies_or_profile(
+        browser, profile, is_ephemeral = await launch_from_cookies_or_profile(
             settings, request.order_id, request.profile_path, request.session_cookies_json,
         )
     else:

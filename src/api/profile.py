@@ -68,6 +68,8 @@ async def spawn_profile(request: SpawnProfileRequest):
             headless=request.headless,
             ttl_minutes=ttl_minutes,
             create_if_missing=request.create_if_missing,
+            session_cookies_json=request.session_cookies_json,
+            tiktok_profile_id=request.tiktok_profile_id,
         )
     except ProfileNotFoundError:
         raise HTTPException(status_code=404, detail=f"No saved profile at {path}")

@@ -1,15 +1,18 @@
 import asyncio
 import os
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
-from ..automation.browser import launch_browser, close_browser
+from ..api.fulfill import get_core_client
+from ..automation.browser import close_browser
 from ..automation.tiktok_login import check_logged_in
 from ..concurrency.lock_manager import get_lock_manager
 from ..config import get_settings
+from .session_launch import launch_from_cookies_or_profile, teardown_session_browser
 
 
 class ProfileNotFoundError(Exception):
@@ -30,6 +33,9 @@ class SpawnSession:
     started_at: datetime
     expires_at: datetime
     browser: object = None
+    tab: object = field(default=None, repr=False)
+    is_ephemeral: bool = False
+    tiktok_profile_id: str = ""
     devtools_url: str = ""
     websocket_url: str = ""
     expiry_task: asyncio.Task | None = field(default=None, repr=False)
@@ -62,8 +68,12 @@ class SpawnManager:
         headless: bool = False,
         ttl_minutes: int = 30,
         create_if_missing: bool = False,
+        session_cookies_json: str = "",
+        tiktok_profile_id: str = "",
     ) -> SpawnSession:
-        if not os.path.isdir(profile_path):
+        # With stored cookies there's no persistent dir to require — the session is
+        # restored into a throwaway ephemeral profile instead (see launch_from_cookies_or_profile).
+        if not session_cookies_json and not os.path.isdir(profile_path):
             if not create_if_missing:
                 raise ProfileNotFoundError(profile_path)
             logger.info(f"Profile dir {profile_path} missing, creating a fresh one on request")
@@ -76,9 +86,15 @@ class SpawnManager:
         # event loop this cannot race another spawn/fulfill for the same profile.
         await lock_mgr.acquire(lock_key)
 
+        session_id = uuid.uuid4().hex
         browser = None
+        actual_profile_path = profile_path
+        is_ephemeral = False
         try:
-            browser = await launch_browser(profile_path, headless=headless, sadcaptcha_api_key=get_settings().sadcaptcha_api_key)
+            settings = get_settings()
+            browser, actual_profile_path, is_ephemeral = await launch_from_cookies_or_profile(
+                settings, session_id, profile_path, session_cookies_json, headless=headless,
+            )
             tab = await browser.get(url)
             logged_in = await check_logged_in(tab)
         except Exception:
@@ -87,19 +103,24 @@ class SpawnManager:
                     await close_browser(browser)
                 except Exception:
                     pass
+                if is_ephemeral:
+                    shutil.rmtree(actual_profile_path, ignore_errors=True)
             lock_mgr.release(lock_key)
             raise
 
         now = datetime.now(timezone.utc)
         session = SpawnSession(
-            session_id=uuid.uuid4().hex,
-            profile_path=profile_path,
+            session_id=session_id,
+            profile_path=actual_profile_path,
             lock_key=lock_key,
             url=url,
             logged_in=logged_in,
             started_at=now,
             expires_at=now + timedelta(minutes=ttl_minutes),
             browser=browser,
+            tab=tab,
+            is_ephemeral=is_ephemeral,
+            tiktok_profile_id=tiktok_profile_id,
             devtools_url=_devtools_url(browser),
             websocket_url=getattr(browser, "websocket_url", "") or "",
         )
@@ -108,8 +129,8 @@ class SpawnManager:
             self._expire(session.session_id, ttl_minutes * 60)
         )
         logger.info(
-            f"Spawned profile session {session.session_id} profile={profile_path} "
-            f"logged_in={logged_in} ttl={ttl_minutes}m"
+            f"Spawned profile session {session.session_id} profile={actual_profile_path} "
+            f"logged_in={logged_in} ephemeral={is_ephemeral} ttl={ttl_minutes}m"
         )
         return session
 
@@ -122,10 +143,19 @@ class SpawnManager:
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
+        # Re-check right before closing (not the stale flag from spawn time) — an
+        # admin may have just finished a manual re-login inside this session, and
+        # that's exactly the case worth persisting back to Core.
+        currently_logged_in = session.logged_in
         try:
-            await close_browser(session.browser)
-        except Exception as e:
-            logger.warning(f"Closing browser for session {session_id} failed: {e}")
+            currently_logged_in = await check_logged_in(session.tab)
+        except Exception:
+            pass
+
+        await teardown_session_browser(
+            session.browser, session.profile_path, session.tiktok_profile_id,
+            get_core_client(), session.is_ephemeral, refresh_cookies=currently_logged_in,
+        )
 
         get_lock_manager().release(session.lock_key)
         logger.info(f"Closed profile session {session_id} profile={session.profile_path}")

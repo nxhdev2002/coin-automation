@@ -10,11 +10,8 @@ from .config import Settings, set_settings, get_settings
 from .logging_setup import setup_logging
 from .api.fulfill import router as fulfill_router
 from .api.health import router as health_router
-from .api.ip_monitor import router as ip_router
 from .api.profile import router as profile_router
-from .monitor.ip_watcher import get_ip_watcher
 from .profile.spawn import get_spawn_manager
-from .profile.cache_cleaner import get_profile_cache_cleaner
 from .profile.cookie_migrator import get_cookie_migrator
 from .automation.browser_pool import get_warm_pool
 from .api.fulfill import get_core_client
@@ -76,16 +73,12 @@ async def load_settings() -> Settings:
                     screenshot_dir=secrets.get("SCREENSHOT_DIR", r"C:\coin-automation\screenshots"),
                     log_dir=secrets.get("LOG_DIR", r"C:\coin-automation\logs"),
                     state_dir=secrets.get("STATE_DIR", r"C:\coin-automation\state"),
-                    telegram_bot_token=secrets.get("TELEGRAM_BOT_TOKEN", ""),
-                    telegram_chat_id=secrets.get("TELEGRAM_CHAT_ID", ""),
-                    ip_check_interval_minutes=int(secrets.get("IP_CHECK_INTERVAL_MINUTES", "5")),
                     max_concurrent_browsers=int(secrets.get("MAX_CONCURRENT_BROWSERS", "3")),
                     warm_pool_size=int(secrets.get("WARM_POOL_SIZE", "1")),
                     qr_timeout_minutes=int(secrets.get("QR_TIMEOUT_MINUTES", "5")),
                     order_timeout_minutes=float(secrets.get("ORDER_TIMEOUT_MINUTES", "15")),
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
                     spawn_ttl_minutes=int(secrets.get("SPAWN_TTL_MINUTES", "30")),
-                    profile_cache_cleanup_interval_minutes=int(secrets.get("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
                     cookie_migration_interval_seconds=int(secrets.get("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
                     es_uri=secrets.get("ELASTICSEARCH.URI", ""),
                     es_username=secrets.get("ELASTICSEARCH.USERNAME", ""),
@@ -106,12 +99,8 @@ async def load_settings() -> Settings:
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),
         state_dir=os.getenv("STATE_DIR", r"C:\coin-automation\state"),
         spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
-        profile_cache_cleanup_interval_minutes=int(os.getenv("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
         cookie_migration_interval_seconds=int(os.getenv("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
         order_timeout_minutes=float(os.getenv("ORDER_TIMEOUT_MINUTES", "15")),
-        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
-        telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
-        ip_check_interval_minutes=int(os.getenv("IP_CHECK_INTERVAL_MINUTES", "5")),
         warm_pool_size=int(os.getenv("WARM_POOL_SIZE", "1")),
         es_uri=os.getenv("ES_URI", ""),
         es_username=os.getenv("ES_USERNAME", ""),
@@ -139,13 +128,10 @@ async def lifespan(app: FastAPI):
         settings.es_index_format,
     )
 
-    get_ip_watcher().start()
-
     if settings.warm_pool_size > 0:
         get_warm_pool(settings)
         logger.info(f"Warm browser pool started (size={settings.warm_pool_size})")
 
-    get_profile_cache_cleaner().start()
     get_cookie_migrator(get_core_client()).start()
 
     logger.info(f"Coin Automation Service started — API: {settings.core_api_url}")
@@ -153,8 +139,6 @@ async def lifespan(app: FastAPI):
     yield
 
     await get_cookie_migrator(get_core_client()).stop()
-    await get_profile_cache_cleaner().stop()
-    await get_ip_watcher().stop()
 
     if settings.warm_pool_size > 0:
         warm_closed = await get_warm_pool(settings).close_all()
@@ -179,4 +163,3 @@ async def root():
 app.include_router(fulfill_router)
 app.include_router(health_router)
 app.include_router(profile_router)
-app.include_router(ip_router)
