@@ -151,8 +151,13 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
 async def export_cookies(browser) -> list[dict]:
     """Export every cookie visible to this browser via CDP — includes HttpOnly ones,
     unlike `document.cookie`, which is exactly what a real session token needs (TikTok's
-    `sessionid`/`sid_guard`/etc. are all HttpOnly). Returns plain JSON-serializable dicts."""
-    cookies = await browser.send(uc.cdp.network.get_all_cookies())
+    `sessionid`/`sid_guard`/etc. are all HttpOnly). Returns plain JSON-serializable dicts.
+
+    Uses `Storage.getCookies`, not `Network.getAllCookies` — the latter is deprecated CDP
+    and some Chromium builds (e.g. the snapshot build used for SadCaptcha) have dropped it
+    entirely (`'Network.getAllCookies' wasn't found`, seen in production).
+    """
+    cookies = await browser.send(uc.cdp.storage.get_cookies())
     return [
         {
             "name": c.name,
@@ -170,7 +175,12 @@ async def export_cookies(browser) -> list[dict]:
 
 async def inject_cookies(browser, cookies: list[dict]) -> None:
     """Inject a previously-exported cookie set via CDP, before any navigation — restores
-    an authenticated session into a brand-new profile without the original profile dir."""
+    an authenticated session into a brand-new profile without the original profile dir.
+
+    Uses `Storage.setCookies` (batch, one CDP round-trip) — see `export_cookies` for why
+    not the deprecated `Network.setCookie`.
+    """
+    params = []
     for c in cookies:
         kwargs = {
             "name": c["name"],
@@ -184,7 +194,8 @@ async def inject_cookies(browser, cookies: list[dict]) -> None:
             kwargs["same_site"] = uc.cdp.network.CookieSameSite(c["sameSite"])
         if c.get("expires"):
             kwargs["expires"] = c["expires"]
-        await browser.send(uc.cdp.network.set_cookie(**kwargs))
+        params.append(uc.cdp.network.CookieParam(**kwargs))
+    await browser.send(uc.cdp.storage.set_cookies(params))
 
 
 async def close_browser(browser, grace_seconds: float = 3.0) -> None:
