@@ -148,6 +148,45 @@ async def launch_browser(profile_path: str, headless: bool = False, sadcaptcha_a
     return browser
 
 
+async def export_cookies(browser) -> list[dict]:
+    """Export every cookie visible to this browser via CDP — includes HttpOnly ones,
+    unlike `document.cookie`, which is exactly what a real session token needs (TikTok's
+    `sessionid`/`sid_guard`/etc. are all HttpOnly). Returns plain JSON-serializable dicts."""
+    cookies = await browser.send(uc.cdp.network.get_all_cookies())
+    return [
+        {
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain,
+            "path": c.path,
+            "httpOnly": c.http_only,
+            "secure": c.secure,
+            "sameSite": c.same_site.value if c.same_site else None,
+            "expires": c.expires,
+        }
+        for c in cookies
+    ]
+
+
+async def inject_cookies(browser, cookies: list[dict]) -> None:
+    """Inject a previously-exported cookie set via CDP, before any navigation — restores
+    an authenticated session into a brand-new profile without the original profile dir."""
+    for c in cookies:
+        kwargs = {
+            "name": c["name"],
+            "value": c["value"],
+            "domain": c.get("domain"),
+            "path": c.get("path"),
+            "secure": c.get("secure"),
+            "http_only": c.get("httpOnly"),
+        }
+        if c.get("sameSite"):
+            kwargs["same_site"] = uc.cdp.network.CookieSameSite(c["sameSite"])
+        if c.get("expires"):
+            kwargs["expires"] = c["expires"]
+        await browser.send(uc.cdp.network.set_cookie(**kwargs))
+
+
 async def close_browser(browser, grace_seconds: float = 3.0) -> None:
     """Shut Chrome down gracefully instead of killing the process outright.
 

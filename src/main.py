@@ -15,7 +15,9 @@ from .api.profile import router as profile_router
 from .monitor.ip_watcher import get_ip_watcher
 from .profile.spawn import get_spawn_manager
 from .profile.cache_cleaner import get_profile_cache_cleaner
+from .profile.cookie_migrator import get_cookie_migrator
 from .automation.browser_pool import get_warm_pool
+from .api.fulfill import get_core_client
 
 
 async def load_settings() -> Settings:
@@ -84,6 +86,7 @@ async def load_settings() -> Settings:
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
                     spawn_ttl_minutes=int(secrets.get("SPAWN_TTL_MINUTES", "30")),
                     profile_cache_cleanup_interval_minutes=int(secrets.get("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
+                    cookie_migration_interval_seconds=int(secrets.get("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
                     es_uri=secrets.get("ELASTICSEARCH.URI", ""),
                     es_username=secrets.get("ELASTICSEARCH.USERNAME", ""),
                     es_password=secrets.get("ELASTICSEARCH.PASSWORD", ""),
@@ -104,6 +107,7 @@ async def load_settings() -> Settings:
         state_dir=os.getenv("STATE_DIR", r"C:\coin-automation\state"),
         spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
         profile_cache_cleanup_interval_minutes=int(os.getenv("PROFILE_CACHE_CLEANUP_INTERVAL_MINUTES", "60")),
+        cookie_migration_interval_seconds=int(os.getenv("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
         order_timeout_minutes=float(os.getenv("ORDER_TIMEOUT_MINUTES", "15")),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
@@ -142,11 +146,13 @@ async def lifespan(app: FastAPI):
         logger.info(f"Warm browser pool started (size={settings.warm_pool_size})")
 
     get_profile_cache_cleaner().start()
+    get_cookie_migrator(get_core_client()).start()
 
     logger.info(f"Coin Automation Service started — API: {settings.core_api_url}")
 
     yield
 
+    await get_cookie_migrator(get_core_client()).stop()
     await get_profile_cache_cleaner().stop()
     await get_ip_watcher().stop()
 

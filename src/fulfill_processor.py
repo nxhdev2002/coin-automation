@@ -1,9 +1,14 @@
 import asyncio
+import json
+import shutil
 import time
 
 from loguru import logger
 
-from .automation.browser import launch_browser, close_browser, wait_for_element, human_sleep, parse_eval, get_with_retry
+from .automation.browser import (
+    launch_browser, close_browser, wait_for_element, human_sleep, parse_eval,
+    get_with_retry, export_cookies, inject_cookies,
+)
 from .automation.captcha_solver import detect_captcha, solve_captcha
 from .automation.tiktok_login import qr_login, check_logged_in, fetch_identity
 from .automation.tiktok_recharge import (
@@ -22,6 +27,43 @@ from .config import get_settings
 from .concurrency.lock_manager import get_lock_manager
 from .models.fulfill import FulfillRequest, FulfillResult
 from .profile.paths import profile_path, graduate_profile
+
+
+async def _launch_from_cookies_or_profile(settings, order_id: str, profile_path_value: str, session_cookies_json: str, **launch_kwargs):
+    """Launch a browser for an existing account: from stored session cookies into a
+    throwaway ephemeral profile if available, else the legacy persistent profile dir
+    (until this account's cookies have been migrated). Returns (browser, profile, is_ephemeral)."""
+    if session_cookies_json:
+        profile = profile_path(settings.profile_dir, f"_ephemeral_{order_id}")
+        browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key, **launch_kwargs)
+        try:
+            await inject_cookies(browser, json.loads(session_cookies_json))
+        except Exception as e:
+            logger.warning(f"Cookie injection failed for order {order_id}, proceeding without: {e}")
+        return browser, profile, True
+
+    profile = profile_path_value or profile_path(settings.profile_dir, order_id)
+    browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key, **launch_kwargs)
+    return browser, profile, False
+
+
+async def _teardown_session_browser(browser, profile: str, tiktok_profile_id: str, core_client, is_ephemeral: bool, refresh_cookies: bool) -> None:
+    """Refresh stored cookies before closing when the session was confirmed valid this run —
+    this is also how an account still on its legacy persistent profile dir opportunistically
+    migrates to cookie storage the next time it's used (no separate migration script needed).
+    Then close the browser, and for a throwaway ephemeral profile, delete its directory."""
+    if refresh_cookies and tiktok_profile_id:
+        try:
+            fresh_cookies = await export_cookies(browser)
+            await core_client.update_tiktok_profile(tiktok_profile_id, {"sessionCookiesJson": json.dumps(fresh_cookies)})
+        except Exception as e:
+            logger.warning(f"Could not refresh stored cookies for profile {tiktok_profile_id}: {e}")
+    try:
+        await close_browser(browser)
+    except Exception:
+        pass
+    if is_ephemeral:
+        shutil.rmtree(profile, ignore_errors=True)
 
 
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
@@ -86,19 +128,22 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
                 _captcha["cost"] += result.get("cost", 0.0)
                 _captcha["solved"] = _captcha["solved"] or result["solved"]
 
-    profile = request.profile_path
-    if not profile:
+    if not request.profile_path and not request.session_cookies_json:
         return FulfillResult(
             success=False,
             failure_category="ProfileMissing",
-            failure_reason="No linked TikTok profile path was provided for this top-up",
+            failure_reason="No linked TikTok profile or session was provided for this top-up",
         )
 
     await core_client.update_order(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",
     })
 
-    browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key, disable_images=True, proxy_url=request.proxy_url)
+    browser, profile, is_ephemeral = await _launch_from_cookies_or_profile(
+        settings, request.order_id, request.profile_path, request.session_cookies_json,
+        disable_images=True, proxy_url=request.proxy_url,
+    )
+    refresh_cookies = False
 
     try:
         tab = await browser.get(SELECTORS["recharge_url"])
@@ -114,6 +159,7 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
                 failure_category="SessionExpired",
                 failure_reason="TikTok session expired — please log in to this account again",
             )
+        refresh_cookies = True
 
         await core_client.update_order(request.order_id, {
             "fulfillmentPhase": "PurchasingCoins",
@@ -310,10 +356,7 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
             )
 
     finally:
-        try:
-            await close_browser(browser)
-        except Exception:
-            pass
+        await _teardown_session_browser(browser, profile, request.tiktok_profile_id, core_client, is_ephemeral, refresh_cookies)
 
 
 async def _do_login_only(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
@@ -321,17 +364,24 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
     it) and to re-establish a stale session on an existing profile. No purchase."""
     is_new_account = not request.profile_path
     flow_started_at = time.monotonic()
+    profile_id = request.tiktok_profile_id or ""
 
     await core_client.update_account_link(request.order_id, {
         "fulfillmentPhase": "LaunchingBrowser",
     })
 
     warm = None
+    is_ephemeral = False
+    refresh_cookies = False
     if is_new_account and settings.warm_pool_size > 0:
         warm = await get_warm_pool(settings).acquire()
 
     if warm is not None:
         browser, profile = warm
+    elif not is_new_account and request.session_cookies_json:
+        browser, profile, is_ephemeral = await _launch_from_cookies_or_profile(
+            settings, request.order_id, request.profile_path, request.session_cookies_json,
+        )
     else:
         profile = request.profile_path or profile_path(settings.profile_dir, request.order_id)
         browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
@@ -371,6 +421,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
                 failure_reason="QR scan timeout",
                 screenshot_path=screenshot,
             )
+        refresh_cookies = True
 
         if is_new_account:
             logger.info("Login succeeded — waiting for page to settle before fetching identity")
@@ -380,6 +431,12 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             identity = await fetch_identity(tab)
             username = identity.get("display_name") or f"tiktok-{request.order_id[:8]}"
 
+            new_account_cookies_json = ""
+            try:
+                new_account_cookies_json = json.dumps(await export_cookies(browser))
+            except Exception as e:
+                logger.warning(f"Could not export cookies for new account {request.order_id}: {e}")
+
             if warm is not None:
                 # Chrome must release its handles on the profile dir before it
                 # can be moved — close it now instead of waiting for the
@@ -388,7 +445,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
                 await close_browser(browser)
                 profile = graduate_profile(profile, settings.profile_dir, request.order_id)
 
-            profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile)
+            profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile, new_account_cookies_json)
             profile_id = profile_record.get("id")
             await core_client.update_tiktok_profile(profile_id, {
                 "sessionValid": True,
@@ -408,7 +465,4 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
         return FulfillResult(success=False, failure_category="Unknown", failure_reason=str(e))
 
     finally:
-        try:
-            await close_browser(browser)
-        except Exception:
-            pass
+        await _teardown_session_browser(browser, profile, profile_id, core_client, is_ephemeral, refresh_cookies)

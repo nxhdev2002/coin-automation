@@ -25,6 +25,10 @@ class Settings(BaseModel):
     # How often to strip Chrome's disposable cache dirs (Cache/Code Cache/
     # GPUCache) out of stored profiles to save disk. <= 0 disables.
     profile_cache_cleanup_interval_minutes: int = 60
+    # Batch-migrates legacy persistent profiles to stored-cookie sessions, one profile
+    # per interval (throttled so many launches at once don't look like bot activity).
+    # <= 0 disables — lazy migration (on natural top-up/re-login use) still applies.
+    cookie_migration_interval_seconds: int = 30
     es_uri: str = ""
     es_username: str = ""
     es_password: str = ""

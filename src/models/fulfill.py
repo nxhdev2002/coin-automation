@@ -12,6 +12,7 @@ class FulfillRequest(BaseModel):
     mode: str = "TopUp"  # "TopUp" | "LoginOnly"
     profile_path: str = ""  # existing profile's browser-profile dir; empty when adding a brand-new account
     tiktok_profile_id: str = ""  # existing profile's id; empty when adding a brand-new account
+    session_cookies_json: str = ""  # stored session cookies (LoginOnly re-login and TopUp) — empty falls back to profile_path
     coin_amount: int = 0
     card_id: str = ""
     card_number: str = ""

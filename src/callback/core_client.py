@@ -36,13 +36,25 @@ class CoreClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def create_tiktok_profile(self, user_id: str, username: str, path: str) -> dict:
-        resp = await self._client.post(
-            "/internal/coins/tiktok-profile",
-            json={"userId": user_id, "tiktokUsername": username, "profilePath": path},
-        )
+    async def create_tiktok_profile(self, user_id: str, username: str, path: str, session_cookies_json: str = "") -> dict:
+        payload = {"userId": user_id, "tiktokUsername": username, "profilePath": path}
+        if session_cookies_json:
+            payload["sessionCookiesJson"] = session_cookies_json
+        resp = await self._client.post("/internal/coins/tiktok-profile", json=payload)
         resp.raise_for_status()
         return resp.json()
+
+    async def get_profiles_needing_cookie_migration(self, take: int = 1) -> list[dict]:
+        try:
+            resp = await self._client.get(
+                "/internal/coins/tiktok-profiles/needing-cookie-migration",
+                params={"take": take},
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.error(f"get_profiles_needing_cookie_migration failed: {e}")
+            return []
 
     async def update_tiktok_profile(self, profile_id: str, data: dict) -> None:
         try:
