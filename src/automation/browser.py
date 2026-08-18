@@ -193,7 +193,10 @@ async def inject_cookies(browser, cookies: list[dict]) -> None:
         if c.get("sameSite"):
             kwargs["same_site"] = uc.cdp.network.CookieSameSite(c["sameSite"])
         if c.get("expires"):
-            kwargs["expires"] = c["expires"]
+            # nodriver's CookieParam.to_json() calls .to_json() on `expires`, which only
+            # exists on the CDP TimeSinceEpoch wrapper (a float subclass) — a plain float
+            # straight out of JSON (e.g. after a DB round-trip) doesn't have it.
+            kwargs["expires"] = uc.cdp.network.TimeSinceEpoch(c["expires"])
         params.append(uc.cdp.network.CookieParam(**kwargs))
     await browser.send(uc.cdp.storage.set_cookies(params))
 
@@ -218,9 +221,15 @@ async def close_browser(browser, grace_seconds: float = 3.0) -> None:
 
     process = getattr(browser, "_process", None)
     if process is not None:
+        # nodriver's `_process` is an `asyncio.subprocess.Process`, not a
+        # `subprocess.Popen` — it has `.returncode`, not `.poll()`. Calling `.poll()`
+        # raised AttributeError every time, which — silently swallowed by every
+        # caller's `except Exception: pass` — skipped this whole grace-wait *and*
+        # the `browser.stop()` hard-kill fallback below, potentially leaving Chrome
+        # running after every single close.
         deadline = asyncio.get_event_loop().time() + grace_seconds
         while asyncio.get_event_loop().time() < deadline:
-            if process.poll() is not None:
+            if process.returncode is not None:
                 break
             await asyncio.sleep(0.1)
 
