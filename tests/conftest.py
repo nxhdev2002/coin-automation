@@ -39,9 +39,6 @@ class FakeCoreClient:
         self.create_tiktok_profile_calls.append((user_id, username, path))
         return {"id": "new-id", "tikTokUsername": username}
 
-    async def get_card_secret(self, card_id: str) -> dict:
-        return {}
-
     async def close(self):
         pass
 
@@ -70,6 +67,7 @@ def fulfill_request():
         user_id="test-user-id",
         user_name="testuser",
         tiktok_username="test_tiktok_user",
+        profile_path=str(TEST_PROFILE_DIR / "testuser-test_tiktok_user"),
         coin_amount=30,
         card_number="4288520224381899",
         card_cvv="966",

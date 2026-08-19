@@ -37,7 +37,10 @@ def fake_browser():
 
 @pytest.fixture
 def patch_launch(fake_browser):
-    with patch.object(spawn_mod, "launch_browser", AsyncMock(return_value=fake_browser)) as m, \
+    async def fake_launch_from_cookies_or_profile(settings, correlation_id, profile_path_value, session_cookies_json, **kwargs):
+        return fake_browser, profile_path_value, False
+
+    with patch.object(spawn_mod, "launch_from_cookies_or_profile", AsyncMock(side_effect=fake_launch_from_cookies_or_profile)) as m, \
          patch.object(spawn_mod, "check_logged_in", AsyncMock(return_value=True)):
         yield m
 
@@ -84,7 +87,7 @@ async def test_spawn_missing_profile_raises(manager, patch_launch, tmp_path):
     patch_launch.assert_not_called()
 
 
-async def test_spawn_create_if_missing(manager, patch_launch, tmp_path):
+async def test_spawn_create_if_missing(manager, patch_launch, patch_settings, tmp_path):
     """create_if_missing lets a fresh profile be seeded by hand."""
     session = await manager.spawn(
         profile_path=str(tmp_path / "fresh"),
@@ -96,7 +99,7 @@ async def test_spawn_create_if_missing(manager, patch_launch, tmp_path):
     await manager.close(session.session_id)
 
 
-async def test_spawn_holds_and_releases_lock(manager, patch_launch, saved_profile, fake_browser):
+async def test_spawn_holds_and_releases_lock(manager, patch_launch, patch_settings, saved_profile, fake_browser):
     """Session holds the profile lock while open, releases it on close."""
     name, path = saved_profile
     session = await manager.spawn(profile_path=path, lock_key=name, url="https://x")
@@ -125,7 +128,7 @@ async def test_spawn_rejects_busy_profile(manager, patch_launch, saved_profile):
 async def test_spawn_releases_lock_when_launch_fails(manager, saved_profile):
     """A failed launch must not leave the profile locked forever."""
     name, path = saved_profile
-    with patch.object(spawn_mod, "launch_browser", AsyncMock(side_effect=RuntimeError("chrome died"))):
+    with patch.object(spawn_mod, "launch_from_cookies_or_profile", AsyncMock(side_effect=RuntimeError("chrome died"))):
         with pytest.raises(RuntimeError):
             await manager.spawn(profile_path=path, lock_key=name, url="https://x")
     assert get_lock_manager().is_locked(name) is False
@@ -138,7 +141,7 @@ async def test_ttl_closes_session(manager, patch_launch, saved_profile, fake_bro
         profile_path=path, lock_key=name, url="https://x", ttl_minutes=0,
     )
     await asyncio.sleep(0.05)
-    assert manager.get(session.session_id) is None
+    assert session.session_id not in [s.session_id for s in manager.sessions]
     assert fake_browser.stopped_called is True
     assert get_lock_manager().is_locked(name) is False
 

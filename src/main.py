@@ -12,9 +12,7 @@ from .api.fulfill import router as fulfill_router
 from .api.health import router as health_router
 from .api.profile import router as profile_router
 from .profile.spawn import get_spawn_manager
-from .profile.cookie_migrator import get_cookie_migrator
 from .automation.browser_pool import get_warm_pool
-from .api.fulfill import get_core_client
 
 
 async def load_settings() -> Settings:
@@ -79,7 +77,6 @@ async def load_settings() -> Settings:
                     order_timeout_minutes=float(secrets.get("ORDER_TIMEOUT_MINUTES", "15")),
                     captcha_max_retries=int(secrets.get("CAPTCHA_MAX_RETRIES", "3")),
                     spawn_ttl_minutes=int(secrets.get("SPAWN_TTL_MINUTES", "30")),
-                    cookie_migration_interval_seconds=int(secrets.get("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
                     es_uri=secrets.get("ELASTICSEARCH.URI", ""),
                     es_username=secrets.get("ELASTICSEARCH.USERNAME", ""),
                     es_password=secrets.get("ELASTICSEARCH.PASSWORD", ""),
@@ -99,7 +96,6 @@ async def load_settings() -> Settings:
         log_dir=os.getenv("LOG_DIR", r"C:\coin-automation\logs"),
         state_dir=os.getenv("STATE_DIR", r"C:\coin-automation\state"),
         spawn_ttl_minutes=int(os.getenv("SPAWN_TTL_MINUTES", "30")),
-        cookie_migration_interval_seconds=int(os.getenv("COOKIE_MIGRATION_INTERVAL_SECONDS", "30")),
         order_timeout_minutes=float(os.getenv("ORDER_TIMEOUT_MINUTES", "15")),
         warm_pool_size=int(os.getenv("WARM_POOL_SIZE", "1")),
         es_uri=os.getenv("ES_URI", ""),
@@ -132,13 +128,9 @@ async def lifespan(app: FastAPI):
         get_warm_pool(settings)
         logger.info(f"Warm browser pool started (size={settings.warm_pool_size})")
 
-    get_cookie_migrator(get_core_client()).start()
-
     logger.info(f"Coin Automation Service started — API: {settings.core_api_url}")
 
     yield
-
-    await get_cookie_migrator(get_core_client()).stop()
 
     if settings.warm_pool_size > 0:
         warm_closed = await get_warm_pool(settings).close_all()

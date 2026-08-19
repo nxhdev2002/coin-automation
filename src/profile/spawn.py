@@ -57,9 +57,6 @@ class SpawnManager:
     def sessions(self) -> list[SpawnSession]:
         return list(self._sessions.values())
 
-    def get(self, session_id: str) -> SpawnSession | None:
-        return self._sessions.get(session_id)
-
     async def spawn(
         self,
         profile_path: str,

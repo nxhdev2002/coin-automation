@@ -319,16 +319,3 @@ async def skip_link_card_prompt(tab) -> bool:
 
     logger.error("[SaveCard] FAILED to uncheck after 3 attempts — ABORTING to protect customer account")
     return False
-
-
-async def verify_iframe_visible(tab) -> bool:
-    js = """
-    (() => {
-        const f = document.querySelector('iframe[src*="pipopay"]');
-        if (!f) return false;
-        const b = f.getBoundingClientRect();
-        return b.width > 50 && b.height > 50;
-    })()
-    """
-    result = await tab.evaluate(js)
-    return bool(result)

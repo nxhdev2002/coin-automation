@@ -19,10 +19,6 @@ class Settings(BaseModel):
     order_timeout_minutes: float = 15
     captcha_max_retries: int = 3
     spawn_ttl_minutes: int = 30
-    # Batch-migrates legacy persistent profiles to stored-cookie sessions, one profile
-    # per interval (throttled so many launches at once don't look like bot activity).
-    # <= 0 disables — lazy migration (on natural top-up/re-login use) still applies.
-    cookie_migration_interval_seconds: int = 30
     es_uri: str = ""
     es_username: str = ""
     es_password: str = ""

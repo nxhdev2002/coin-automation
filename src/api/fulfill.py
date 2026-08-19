@@ -32,6 +32,7 @@ async def _run_fulfillment_background(request: FulfillRequest):
         buyer_user_name=request.user_name,
         tiktok_username=request.tiktok_username,
         order_status="Received",
+        flow_type=request.mode,
     ):
         await _fulfill_and_report(request)
 
@@ -102,6 +103,7 @@ async def fulfill_order(request: FulfillRequest):
         buyer_user_name=request.user_name,
         tiktok_username=request.tiktok_username,
         order_status="Received",
+        flow_type=request.mode,
     ):
         drain_mgr = get_drain_manager()
         if drain_mgr.draining:

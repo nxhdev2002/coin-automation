@@ -1,11 +1,11 @@
 """E2E tests: fulfill_processor — full orchestration flow + error branches."""
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
-from src.fulfill_processor import process_order, _save_profile
+from src.fulfill_processor import process_order
 from src.models.fulfill import FulfillRequest, FulfillResult
 from src.config import Settings
 
@@ -28,21 +28,22 @@ def test_settings_local():
     )
 
 
-async def test_fulfill_qr_timeout(fulfill_request, fake_core_client, patch_settings):
-    """Full process_order with QR timeout (nobody scans) → QrScanTimeout."""
+async def test_fulfill_session_expired(fulfill_request, fake_core_client, patch_settings):
+    """Top-up on a profile with no valid session fails fast with SessionExpired —
+    _do_topup no longer falls back to a QR-login retry (that's the separate,
+    explicit re-login flow via _do_login_only); it only ever checks the existing
+    session and fails immediately if it isn't logged in."""
     result = await process_order(fulfill_request, fake_core_client)
     assert result.success is False
-    assert result.failure_category == "QrScanTimeout"
-    assert "QR scan timeout" in result.failure_reason
+    assert result.failure_category == "SessionExpired"
 
     phases = [c[1].get("fulfillmentPhase") for c in fake_core_client.update_order_calls]
     assert "LaunchingBrowser" in phases
-    assert "WaitingForQrScan" in phases
 
 
 async def test_fulfill_browser_crash(fulfill_request, fake_core_client, patch_settings):
     """Browser launch failure → Unknown category."""
-    with patch("src.fulfill_processor.launch_browser", side_effect=Exception("Chrome not found")):
+    with patch("src.fulfill_processor.launch_from_cookies_or_profile", side_effect=Exception("Chrome not found")):
         result = await process_order(fulfill_request, fake_core_client)
     assert result.success is False
     assert result.failure_category == "Unknown"
@@ -50,11 +51,11 @@ async def test_fulfill_browser_crash(fulfill_request, fake_core_client, patch_se
 
 
 async def test_fulfill_lock_per_user(fulfill_request, fake_core_client, patch_settings):
-    """Lock is acquired and released per user_name-tiktok_username."""
+    """Lock is acquired (keyed on the profile path, per process_order) and released."""
     from src.concurrency.lock_manager import get_lock_manager
     lock_mgr = get_lock_manager()
 
-    lock_key = f"{fulfill_request.user_name}-{fulfill_request.tiktok_username}"
+    lock_key = fulfill_request.profile_path
     assert not lock_mgr.is_locked(lock_key)
 
     asyncio.create_task(process_order(fulfill_request, fake_core_client))
@@ -62,33 +63,6 @@ async def test_fulfill_lock_per_user(fulfill_request, fake_core_client, patch_se
 
     assert lock_mgr.is_locked(lock_key)
 
-    await asyncio.sleep(65)
+    await asyncio.sleep(10)
 
     assert not lock_mgr.is_locked(lock_key)
-
-
-async def test_save_profile_new(fake_core_client, fulfill_request, patch_settings):
-    """_save_profile creates a new profile when it doesn't exist."""
-    fake_core_client.profile_exists = False
-    profile_path = "C:\\test\\profiles\\testuser-test_tiktok_user"
-    await _save_profile(fake_core_client, fulfill_request, profile_path)
-    assert len(fake_core_client.create_tiktok_profile_calls) == 1
-    user_id, username, path = fake_core_client.create_tiktok_profile_calls[0]
-    assert username == fulfill_request.tiktok_username
-    assert path == profile_path
-
-
-async def test_save_profile_exists(fake_core_client, fulfill_request, patch_settings):
-    """_save_profile skips creation when profile already exists."""
-    fake_core_client.profile_exists = True
-    await _save_profile(fake_core_client, fulfill_request, "some_path")
-    assert len(fake_core_client.create_tiktok_profile_calls) == 0
-
-
-async def test_save_profile_api_error(fulfill_request, patch_settings):
-    """_save_profile handles API errors gracefully (no exception raised)."""
-    client = MagicMock()
-    client.get_tiktok_profile = AsyncMock(side_effect=Exception("Network error"))
-    client.create_tiktok_profile = AsyncMock()
-    await _save_profile(client, fulfill_request, "path")
-    assert client.create_tiktok_profile.call_count == 0

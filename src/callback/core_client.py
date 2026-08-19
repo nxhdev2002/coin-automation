@@ -1,7 +1,18 @@
+import asyncio
+
 import httpx
 from loguru import logger
 
 from ..logging_context import set_order_status
+
+# 401/403 can happen if a request lands during a momentary refresh window on
+# Core's shared API-key config (seen in production: the same order's earlier
+# calls succeeded, only one landed mid-refresh and got a bogus 403); 429/5xx
+# are ordinary backend hiccups. A single hit on a status-report call must not
+# permanently drop that order's final outcome, so these get a few retries.
+# Anything else (404 order-not-found, 400 bad payload, etc.) fails immediately.
+_RETRYABLE_STATUS_CODES = {401, 403, 429, 500, 502, 503, 504}
+_RETRY_BACKOFF_SECONDS = (1, 3, 8)
 
 
 class CoreClient:
@@ -13,21 +24,36 @@ class CoreClient:
             verify=False,
         )
 
+    async def _request_with_retry(self, method: str, url: str, json_body: dict) -> httpx.Response:
+        """Send with retry+backoff on transient failures (401/403/429/5xx, or a
+        network error). Raises on the final attempt's failure, same as a plain
+        unretried request would — callers keep their existing try/except."""
+        last_exc: Exception | None = None
+        for delay in _RETRY_BACKOFF_SECONDS + (None,):
+            try:
+                resp = await self._client.request(method, url, json=json_body)
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError as e:
+                if delay is None or e.response.status_code not in _RETRYABLE_STATUS_CODES:
+                    raise
+                last_exc = e
+            except httpx.RequestError as e:
+                if delay is None:
+                    raise
+                last_exc = e
+            logger.warning(f"{method} {url} failed ({last_exc}), retrying in {delay}s")
+            await asyncio.sleep(delay)
+
     async def update_order(self, order_id: str, data: dict) -> None:
         # Every phase transition already flows through here, so this is the one
         # place that has to keep the order status on the logs up to date.
         set_order_status(data.get("fulfillmentPhase", ""))
         try:
-            resp = await self._client.post(f"/internal/coins/{order_id}/update", json=data)
-            resp.raise_for_status()
+            await self._request_with_retry("POST", f"/internal/coins/{order_id}/update", data)
             logger.debug(f"update_order {order_id}: {data}")
         except Exception as e:
             logger.error(f"update_order failed: {e}")
-
-    async def get_card_secret(self, card_id: str) -> dict:
-        resp = await self._client.get(f"/internal/coins/card-secret/{card_id}")
-        resp.raise_for_status()
-        return resp.json()
 
     async def get_tiktok_profile(self, user_id: str, tiktok_username: str) -> dict | None:
         resp = await self._client.get(f"/internal/coins/tiktok-profile/{user_id}/{tiktok_username}")
@@ -44,46 +70,11 @@ class CoreClient:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_profiles_needing_cookie_migration(self, take: int = 1) -> list[dict]:
-        try:
-            resp = await self._client.get(
-                "/internal/coins/tiktok-profiles/needing-cookie-migration",
-                params={"take": take},
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            logger.error(f"get_profiles_needing_cookie_migration failed: {e}")
-            return []
-
     async def update_tiktok_profile(self, profile_id: str, data: dict) -> None:
         try:
-            resp = await self._client.put(f"/internal/coins/tiktok-profile/{profile_id}", json=data)
-            resp.raise_for_status()
+            await self._request_with_retry("PUT", f"/internal/coins/tiktok-profile/{profile_id}", data)
         except Exception as e:
             logger.error(f"update_tiktok_profile failed: {e}")
-
-    async def get_verification_code(self, order_id: str) -> str | None:
-        try:
-            resp = await self._client.get(f"/internal/coins/verification-code/{order_id}")
-            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
-                return None
-            resp.raise_for_status()
-            return resp.text.strip()
-        except Exception as e:
-            logger.error(f"get_verification_code failed: {e}")
-            return None
-
-    async def get_verification_option(self, order_id: str) -> str | None:
-        try:
-            resp = await self._client.get(f"/internal/coins/verification-option/{order_id}")
-            if resp.status_code == 204 or not resp.text or resp.text.strip() in ("", "null"):
-                return None
-            resp.raise_for_status()
-            return resp.text.strip()
-        except Exception as e:
-            logger.error(f"get_verification_option failed: {e}")
-            return None
 
     async def update_account_link(self, link_request_id: str, data: dict) -> None:
         set_order_status(data.get("fulfillmentPhase", ""))

@@ -130,7 +130,7 @@ async def test_order_timeout_aborts_and_releases_lock(patch_settings, fulfill_re
     async def hang(*a, **k):
         await asyncio.sleep(30)
 
-    with patch("src.fulfill_processor._do_fulfill", side_effect=hang):
+    with patch("src.fulfill_processor._dispatch", side_effect=hang):
         result = await process_order(fulfill_request, fake_core_client)
 
     assert result.success is False
@@ -144,7 +144,7 @@ async def test_order_timeout_disabled_when_zero(patch_settings, fulfill_request,
 
     patch_settings.order_timeout_minutes = 0
 
-    with patch("src.fulfill_processor._do_fulfill",
+    with patch("src.fulfill_processor._dispatch",
                AsyncMock(return_value=FulfillResult(success=True))):
         result = await process_order(fulfill_request, fake_core_client)
     assert result.success is True

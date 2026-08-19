@@ -215,7 +215,11 @@ async def close_browser(browser, grace_seconds: float = 3.0) -> None:
     and only fall back to the hard kill in `browser.stop()` if it doesn't.
     """
     try:
-        await browser.send(uc.cdp.browser.close())
+        # Raw CDP call, no built-in timeout — bound it so a stuck websocket/tab
+        # can't hang this indefinitely (the hard-kill fallback below still runs
+        # either way, but callers awaiting close_browser() shouldn't be able to
+        # get stuck here forever).
+        await asyncio.wait_for(browser.send(uc.cdp.browser.close()), timeout=10)
     except Exception:
         pass
 
@@ -261,21 +265,6 @@ async def wait_for_element(tab, selector: str, timeout: int = 30, poll_interval:
     while elapsed < timeout:
         try:
             result = await tab.evaluate(js)
-            if result:
-                return True
-        except Exception:
-            pass
-        await asyncio.sleep(poll_interval)
-        elapsed += poll_interval
-    return False
-
-
-async def wait_for_element_fn(tab, js_fn: str, timeout: int = 10, poll_interval: float = 0.5) -> bool:
-    """Poll via JS function that returns truthy. Returns True if truthy, False on timeout."""
-    elapsed = 0.0
-    while elapsed < timeout:
-        try:
-            result = await tab.evaluate(js_fn)
             if result:
                 return True
         except Exception:

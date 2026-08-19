@@ -9,6 +9,7 @@ ORDER_LOG_FIELDS = (
     "buyer_user_name",
     "tiktok_username",
     "order_status",
+    "flow_type",
 )
 
 # Ad-hoc metric fields set via logger.bind(...) at individual log call sites
@@ -35,11 +36,15 @@ def order_log_context(
     buyer_user_name: str = "",
     tiktok_username: str = "",
     order_status: str = "",
+    flow_type: str = "",
 ):
     """Tag every log emitted inside this block with the order it belongs to.
 
     Backed by a contextvar, so concurrent fulfillments (each its own asyncio
-    task) never see each other's fields.
+    task) never see each other's fields. `flow_type` ("TopUp" | "LoginOnly",
+    from `FulfillRequest.mode`) lets ELK split top-up orders from add-account/
+    re-login traffic even for the shared deep-automation logs (QR timing etc.)
+    that don't otherwise know which flow they're running under.
     """
     ctx = {
         "order_id": order_id,
@@ -47,6 +52,7 @@ def order_log_context(
         "buyer_user_name": buyer_user_name,
         "tiktok_username": tiktok_username,
         "order_status": order_status,
+        "flow_type": flow_type,
     }
     token = _order_context.set(ctx)
     try:
