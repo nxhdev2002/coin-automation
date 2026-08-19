@@ -428,4 +428,4 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
         return FulfillResult(success=False, failure_category="Unknown", failure_reason=str(e))
 
     finally:
-        await _teardown_session_browser(browser, profile, profile_id, core_client, is_ephemeral, refresh_cookies)
+        await teardown_session_browser(browser, profile, profile_id, core_client, is_ephemeral, refresh_cookies)

@@ -31,7 +31,7 @@ class CookieMigrationJob:
     locked (an active fulfillment run or spawn/debug session) — it'll be picked up on
     a later sweep once it's free. This is a *supplement* to the lazy migration that
     already happens as a side effect of normal top-up/re-login traffic (see
-    `fulfill_processor._teardown_session_browser`) — this job exists to clear the
+    `profile.session_launch.teardown_session_browser`) — this job exists to clear the
     backlog of dormant accounts that traffic alone wouldn't reach any time soon.
     """
 
