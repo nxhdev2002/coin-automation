@@ -202,9 +202,12 @@ async def fetch_identity(tab) -> dict:
 async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5, flow_started_at: float | None = None) -> bool:
     """Run the QR login flow.
 
-    Assumes the caller has already navigated `tab` to the login page and
-    confirmed the account isn't logged in — this function does not
-    re-navigate there, to avoid loading the login page twice.
+    Assumes the caller has already navigated `tab` directly to
+    `SELECTORS["qr_login_url"]` and confirmed the account isn't logged in —
+    this function does not re-navigate there, to avoid loading it twice.
+    That URL serves the QR canvas immediately, with no channel-list click
+    needed (unlike `SELECTORS["login_url"]`, which requires clicking the QR
+    channel item first via `click_qr_login`).
 
     `flow_started_at` (a `time.monotonic()` stamp from the caller) is optional
     and only used to log how long the first QR code took to become visible —
@@ -216,7 +219,6 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
         "fulfillmentPhase": "WaitingForQrScan",
     })
 
-    await click_qr_login(tab)
     await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=30)
 
     deadline = datetime.now(timezone.utc) + timedelta(minutes=timeout_minutes)
@@ -264,9 +266,7 @@ async def qr_login(tab, callback_client, order_id: str, timeout_minutes: int = 5
 
         if status == "qr_expired" or datetime.now(timezone.utc) - qr_refreshed_at > timedelta(seconds=80):
             logger.info("QR expired, refreshing...")
-            await tab.get(SELECTORS["login_url"])
-            await wait_for_element(tab, '[data-e2e="channel-item"]', timeout=30)
-            await click_qr_login(tab)
+            await tab.get(SELECTORS["qr_login_url"])
             await wait_for_element(tab, SELECTORS["qr_code_container"], timeout=30)
             last_qr_sent = None
             qr_refreshed_at = datetime.now(timezone.utc)

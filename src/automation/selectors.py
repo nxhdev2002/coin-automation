@@ -1,5 +1,10 @@
 SELECTORS = {
     "login_url": "https://www.tiktok.com/login",
+    # Skips the channel-list render + click entirely — TikTok serves the QR
+    # canvas directly at this URL, same data-e2e markup as clicking through.
+    # Verified live 2026-08-18: [data-e2e="qr-code"] canvas is present and
+    # populated immediately on load, no click needed.
+    "qr_login_url": "https://www.tiktok.com/login/qrcode",
     "recharge_url": "https://www.tiktok.com/coin",
 
     "qr_channel_item": '[data-e2e="channel-item"]',

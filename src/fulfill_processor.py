@@ -359,13 +359,10 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             # A brand-new profile has no session to check — the recharge_url
             # round-trip below (navigate + sleep + check_logged_in) always
             # resolves to "not logged in" here, so skip straight to QR login.
-            # A fresh profile's first-ever navigation is cold (no cached JS/TLS
-            # session from a prior tiktok.com visit), so — unlike the re-login
-            # branch below, which arrives here already warmed up by the
-            # recharge_url load — explicitly wait for the login channel list to
-            # render before qr_login's click, instead of racing it.
-            tab = await get_with_retry(browser, SELECTORS["login_url"])
-            await wait_for_element(tab, SELECTORS["qr_channel_item"], timeout=15)
+            # Navigate straight to the QR sub-page instead of the login page's
+            # channel list — TikTok serves the QR canvas directly there, so
+            # there's no channel-item render + click round-trip to wait on.
+            tab = await get_with_retry(browser, SELECTORS["qr_login_url"])
             logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
         else:
             tab = await get_with_retry(browser, SELECTORS["recharge_url"])
@@ -373,7 +370,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
 
             logged_in = await check_logged_in(tab)
             if not logged_in:
-                tab = await get_with_retry(browser, SELECTORS["login_url"])
+                tab = await get_with_retry(browser, SELECTORS["qr_login_url"])
                 logged_in = await qr_login(tab, core_client, request.order_id, settings.qr_timeout_minutes, flow_started_at=flow_started_at)
 
         if not logged_in:
