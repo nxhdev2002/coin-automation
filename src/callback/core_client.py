@@ -14,6 +14,15 @@ from ..logging_context import set_order_status
 _RETRYABLE_STATUS_CODES = {401, 403, 429, 500, 502, 503, 504}
 _RETRY_BACKOFF_SECONDS = (1, 3, 8)
 
+# Explicit backstop on top of the client's own `timeout=30.0` — seen in
+# production: a request over the Tailscale-routed connection to Core silently
+# hung well past 30s with zero error (a stale pooled connection / dead-socket
+# "TCP black hole" that never surfaces a read/connect error at the transport
+# layer). A plain httpx timeout wasn't enough to bound it, so this wraps every
+# attempt in an asyncio-level wait_for that forcibly cancels and retries no
+# matter what the transport is doing underneath.
+_HARD_REQUEST_TIMEOUT_SECONDS = 35
+
 
 class CoreClient:
     def __init__(self, base_url: str, api_key: str):
@@ -31,14 +40,17 @@ class CoreClient:
         last_exc: Exception | None = None
         for delay in _RETRY_BACKOFF_SECONDS + (None,):
             try:
-                resp = await self._client.request(method, url, json=json_body)
+                resp = await asyncio.wait_for(
+                    self._client.request(method, url, json=json_body),
+                    timeout=_HARD_REQUEST_TIMEOUT_SECONDS,
+                )
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError as e:
                 if delay is None or e.response.status_code not in _RETRYABLE_STATUS_CODES:
                     raise
                 last_exc = e
-            except httpx.RequestError as e:
+            except (httpx.RequestError, asyncio.TimeoutError) as e:
                 if delay is None:
                     raise
                 last_exc = e
@@ -77,10 +89,11 @@ class CoreClient:
             logger.error(f"update_tiktok_profile failed: {e}")
 
     async def update_account_link(self, link_request_id: str, data: dict) -> None:
+        # Same status-report call as update_order, just for the login-only/
+        # add-account flow — same retry+hard-timeout treatment.
         set_order_status(data.get("fulfillmentPhase", ""))
         try:
-            resp = await self._client.post(f"/internal/coins/account-link/{link_request_id}/update", json=data)
-            resp.raise_for_status()
+            await self._request_with_retry("POST", f"/internal/coins/account-link/{link_request_id}/update", data)
             logger.debug(f"update_account_link {link_request_id}: {data}")
         except Exception as e:
             logger.error(f"update_account_link failed: {e}")
