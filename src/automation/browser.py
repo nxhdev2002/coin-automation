@@ -23,15 +23,29 @@ async def human_sleep(min_s: float = 1.0, max_s: float = 5.0):
 
 
 async def get_with_retry(browser, url: str, retries: int = 1):
-    """`browser.get(url)`, retrying once on a transient CDP handshake timeout.
+    """`browser.get(url)`, retrying once on known "browser isn't fully ready yet"
+    races right after `launch_browser()` returns:
 
-    nodriver opens a fresh CDP websocket per tab the first time it's used; under
-    concurrent browser load (multiple Chrome instances launching/navigating at
-    once) that handshake can occasionally miss its timeout window even though
-    the browser process itself is healthy (`TimeoutError: timed out during
-    opening handshake`, seen in production). A bare retry clears it without
-    failing the whole order — only that specific error is retried, anything
-    else propagates immediately.
+    - `TimeoutError: timed out during opening handshake` — nodriver opens a fresh
+      CDP websocket per tab the first time it's used; under concurrent browser
+      load that handshake can occasionally miss its timeout window even though
+      the browser process itself is healthy.
+    - `RuntimeError: coroutine raised StopIteration` — nodriver's own
+      `Browser.get()` does a bare `next(filter(lambda item: item.target.type_ ==
+      "page", self.targets))` with no fallback and no wait for the target list
+      to populate. Called immediately after launch (as every caller here does),
+      there's a real race where Chrome's CDP target-discovery event hasn't
+      arrived yet, so the filter comes up empty — a genuine nodriver library
+      bug, seen in production on every first-navigation-after-launch call site.
+    - `ConnectionRefusedError` — nodriver opens each tab's CDP websocket lazily,
+      on first use. Right after launch, that per-tab devtools endpoint can
+      refuse the very first connection attempt (same "not fully up yet" class
+      as the two above). Seen in production crashing the whole add-account
+      flow with `category=Unknown` — including once *through* this very retry
+      wrapper, because this exception type wasn't on the retry list yet.
+
+    A bare retry clears all three without failing the whole order — only these
+    specific errors are retried, anything else propagates immediately.
     """
     for attempt in range(retries + 1):
         try:
@@ -40,6 +54,16 @@ async def get_with_retry(browser, url: str, retries: int = 1):
             if attempt >= retries or "opening handshake" not in str(e):
                 raise
             logger.warning(f"CDP handshake timeout navigating to {url}, retrying ({attempt + 1}/{retries})")
+            await asyncio.sleep(1)
+        except RuntimeError as e:
+            if attempt >= retries or "coroutine raised StopIteration" not in str(e):
+                raise
+            logger.warning(f"Browser had no page target yet navigating to {url}, retrying ({attempt + 1}/{retries})")
+            await asyncio.sleep(1)
+        except ConnectionRefusedError:
+            if attempt >= retries:
+                raise
+            logger.warning(f"CDP endpoint refused connection navigating to {url}, retrying ({attempt + 1}/{retries})")
             await asyncio.sleep(1)
 
 

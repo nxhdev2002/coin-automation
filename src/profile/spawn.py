@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from ..api.fulfill import get_core_client
-from ..automation.browser import close_browser
+from ..automation.browser import close_browser, get_with_retry
 from ..automation.tiktok_login import check_logged_in
 from ..concurrency.lock_manager import get_lock_manager
 from ..config import get_settings
@@ -92,7 +92,7 @@ class SpawnManager:
             browser, actual_profile_path, is_ephemeral = await launch_from_cookies_or_profile(
                 settings, session_id, profile_path, session_cookies_json, headless=headless,
             )
-            tab = await browser.get(url)
+            tab = await get_with_retry(browser, url)
             logged_in = await check_logged_in(tab)
         except Exception:
             if browser is not None:

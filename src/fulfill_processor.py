@@ -6,7 +6,7 @@ from loguru import logger
 
 from .automation.browser import (
     launch_browser, close_browser, wait_for_element, human_sleep, parse_eval,
-    get_with_retry, export_cookies, inject_cookies,
+    get_with_retry, export_cookies,
 )
 from .automation.captcha_solver import detect_captcha, solve_captcha
 from .automation.tiktok_login import qr_login, check_logged_in, fetch_identity
@@ -109,7 +109,9 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
     refresh_cookies = False
 
     try:
-        tab = await browser.get(SELECTORS["recharge_url"])
+        # First navigation right after launch — same "no page target yet" race
+        # get_with_retry already guards against for the add-account/login flows.
+        tab = await get_with_retry(browser, SELECTORS["recharge_url"])
         await human_sleep(3, 5)
 
         logged_in = await check_logged_in(tab)
