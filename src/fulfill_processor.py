@@ -29,6 +29,37 @@ from .profile.paths import profile_path, graduate_profile
 from .profile.session_launch import launch_from_cookies_or_profile, teardown_session_browser
 
 
+class SessionHandle:
+    """Populated by _do_topup/_do_login_only as soon as a browser is launched.
+
+    process_order uses this to tear the browser down in the background, after
+    it has already returned the FulfillResult — see process_order for why."""
+
+    def __init__(self):
+        self.browser = None
+        self.profile = None
+        self.is_ephemeral = False
+        self.refresh_cookies = False
+        self.tiktok_profile_id = None
+
+
+# Kept alive here so a fire-and-forget teardown task isn't garbage-collected
+# mid-run (asyncio only holds a weak reference to tasks nothing else refers to).
+_background_teardowns: set[asyncio.Task] = set()
+
+
+async def _teardown_and_release(session: SessionHandle, core_client: CoreClient, lock_key: str, lock_mgr, order_id: str) -> None:
+    try:
+        await teardown_session_browser(
+            session.browser, session.profile, session.tiktok_profile_id,
+            core_client, session.is_ephemeral, session.refresh_cookies,
+        )
+    except Exception as e:
+        logger.warning(f"Background teardown for order {order_id} failed: {e}")
+    finally:
+        lock_mgr.release(lock_key)
+
+
 async def process_order(request: FulfillRequest, core_client: CoreClient) -> FulfillResult:
     settings = get_settings()
     lock_mgr = get_lock_manager()
@@ -38,6 +69,7 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
     # locks on its own link-request id instead (never collides with a real profile path).
     lock_key = request.profile_path or f"link:{request.order_id}"
     await lock_mgr.acquire(lock_key)
+    session = SessionHandle()
     try:
         # Hard ceiling for the whole run: every step has its own timeout, but
         # a hung CDP call would otherwise block forever — holding this profile's
@@ -45,8 +77,8 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
         timeout_s = settings.order_timeout_minutes * 60
         if timeout_s > 0:
             async with asyncio.timeout(timeout_s):
-                return await _dispatch(request, core_client, settings)
-        return await _dispatch(request, core_client, settings)
+                return await _dispatch(request, core_client, settings, session)
+        return await _dispatch(request, core_client, settings, session)
     except TimeoutError:
         logger.error(f"Request {request.order_id} exceeded {settings.order_timeout_minutes} min, aborted")
         return FulfillResult(
@@ -64,16 +96,31 @@ async def process_order(request: FulfillRequest, core_client: CoreClient) -> Ful
             failure_reason=str(e),
         )
     finally:
-        lock_mgr.release(lock_key)
+        # Cookie export / browser close is a raw CDP call that has hung past its own
+        # internal guard before (see session_launch.py) — long enough to eat the whole
+        # order timeout above. Awaiting it here would delay the result callers report to
+        # Core by however long that hang lasts, and if it outlives the timeout scope it
+        # would silently flip an already-successful FulfillResult into OrderTimeout.
+        # Run it in the background instead: nothing about the *result* needs to wait for
+        # it, only the profile lock does, so the lock is released from the background
+        # task once teardown actually finishes.
+        if session.browser is not None:
+            task = asyncio.create_task(
+                _teardown_and_release(session, core_client, lock_key, lock_mgr, request.order_id)
+            )
+            _background_teardowns.add(task)
+            task.add_done_callback(_background_teardowns.discard)
+        else:
+            lock_mgr.release(lock_key)
 
 
-async def _dispatch(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+async def _dispatch(request: FulfillRequest, core_client: CoreClient, settings, session: SessionHandle) -> FulfillResult:
     if request.mode == "LoginOnly":
-        return await _do_login_only(request, core_client, settings)
-    return await _do_topup(request, core_client, settings)
+        return await _do_login_only(request, core_client, settings, session)
+    return await _do_topup(request, core_client, settings, session)
 
 
-async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings, session: SessionHandle) -> FulfillResult:
     """Recharge on an already-linked, session-valid profile.
 
     Deliberately does NOT fall back to a QR login: a stale session must
@@ -106,225 +153,224 @@ async def _do_topup(request: FulfillRequest, core_client: CoreClient, settings) 
         settings, request.order_id, request.profile_path, request.session_cookies_json,
         disable_images=True, proxy_url=request.proxy_url,
     )
-    refresh_cookies = False
+    session.browser = browser
+    session.profile = profile
+    session.is_ephemeral = is_ephemeral
+    session.tiktok_profile_id = request.tiktok_profile_id
 
-    try:
-        # First navigation right after launch — same "no page target yet" race
-        # get_with_retry already guards against for the add-account/login flows.
-        tab = await get_with_retry(browser, SELECTORS["recharge_url"])
+    # First navigation right after launch — same "no page target yet" race
+    # get_with_retry already guards against for the add-account/login flows.
+    tab = await get_with_retry(browser, SELECTORS["recharge_url"])
+    await human_sleep(3, 5)
+
+    logged_in = await check_logged_in(tab)
+    if not logged_in:
+        logger.warning(f"Top-up {request.order_id}: session expired for profile {request.tiktok_profile_id or profile}")
+        if request.tiktok_profile_id:
+            await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": False})
+        return FulfillResult(
+            success=False,
+            failure_category="SessionExpired",
+            failure_reason="TikTok session expired — please log in to this account again",
+        )
+    session.refresh_cookies = True
+
+    await core_client.update_order(request.order_id, {
+        "fulfillmentPhase": "PurchasingCoins",
+    })
+
+    tab = await browser.get(SELECTORS["recharge_url"])
+    await human_sleep(3, 5)
+    await _check_captcha(tab)
+
+    # Verify we're actually on the coin/wallet page
+    current_url = ""
+    for attempt in range(3):
+        try:
+            current_url = await tab.evaluate("location.href")
+            current_url = parse_eval(current_url) if not isinstance(current_url, str) else current_url
+            logger.info(f"Current URL after navigation (attempt {attempt + 1}): {current_url}")
+            if "/coin" in current_url or "/wallet" in current_url:
+                break
+            logger.warning(f"Not on coin/wallet page (URL: {current_url}) — retrying navigation")
+        except Exception as e:
+            logger.warning(f"URL check failed: {e}")
+        await human_sleep(1, 2)
+        tab = await browser.get(SELECTORS["recharge_url"])
         await human_sleep(3, 5)
+        await _check_captcha(tab)
+    else:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="NavigationFailed",
+            failure_reason=f"Could not navigate to coin page after 3 attempts (stuck at {current_url})",
+            screenshot_path=screenshot,
+        )
 
-        logged_in = await check_logged_in(tab)
-        if not logged_in:
-            logger.warning(f"Top-up {request.order_id}: session expired for profile {request.tiktok_profile_id or profile}")
-            if request.tiktok_profile_id:
-                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": False})
+    await human_sleep(2, 4)
+    await uncheck_invite_reward(tab)
+    selected = await select_custom_package(tab, request.coin_amount)
+    if not selected:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="UiElementNotFound",
+            failure_reason=f"Could not select custom package for {request.coin_amount} coins",
+            screenshot_path=screenshot,
+        )
+
+    recharged = await click_recharge(tab)
+    if not recharged:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="UiElementNotFound",
+            failure_reason="Could not click Recharge button",
+            screenshot_path=screenshot,
+            captcha_encountered=_captcha["encountered"],
+            captcha_solved=_captcha["solved"],
+            captcha_cost_usd=_captcha["cost"],
+        )
+
+    await _check_captcha(tab)
+
+    add_card_ok = await select_add_card(tab)
+    if not add_card_ok:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="UiElementNotFound",
+            failure_reason="Could not select Add Card payment method",
+            screenshot_path=screenshot,
+        )
+
+    save_card_safe = await skip_link_card_prompt(tab)
+    if not save_card_safe:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="SaveCardToggleFailure",
+            failure_reason="SAFETY ABORT: Could not confirm 'Save card' toggle is unchecked — refusing to risk saving system card to customer account",
+            screenshot_path=screenshot,
+        )
+
+    iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=30)
+    if not iframe_visible:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
             return FulfillResult(
                 success=False,
-                failure_category="SessionExpired",
-                failure_reason="TikTok session expired — please log in to this account again",
+                failure_category="UiElementNotFound",
+                failure_reason="Pipopay iframe not visible after selecting Add Card",
+                screenshot_path=screenshot,
             )
-        refresh_cookies = True
 
+    await core_client.update_order(request.order_id, {
+        "fulfillmentPhase": "PaymentInProgress",
+    })
+
+    filled = await fill_card_form(
+        browser, tab,
+        card_number=request.card_number,
+        card_cvv=request.card_cvv,
+        card_expiry=request.card_expiry,
+        card_holder=request.card_holder_name,
+    )
+    if not filled:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="UiElementNotFound",
+            failure_reason="Could not fill card form",
+            screenshot_path=screenshot,
+        )
+
+    await human_sleep(1, 3)
+
+    paid = await click_pay_now(tab)
+    if not paid:
+        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+        return FulfillResult(
+            success=False,
+            failure_category="UiElementNotFound",
+            failure_reason="Could not click Pay now button",
+            screenshot_path=screenshot,
+        )
+
+    # After Pay Now, TikTok may redirect to a 3D Secure page where the
+    # card holder confirms the transaction on their banking app (up to 5 min).
+    logger.info("Checking for 3DS redirect after Pay Now...")
+    if await detect_post_recharge_redirect(tab, timeout=30):
+        logger.bind(hit_3ds=True).info("3DS redirect detected — waiting for banking app confirmation")
+        await core_client.update_order(request.order_id, {
+            "fulfillmentPhase": "WaitingForPaymentConfirm",
+        })
+        returned = await wait_for_post_recharge_return(
+            tab,
+            timeout_minutes=request.payment_confirm_timeout_minutes,
+            callback_client=core_client,
+            order_id=request.order_id,
+        )
+        if not returned:
+            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
+            return FulfillResult(
+                success=False,
+                failure_category="PaymentConfirmTimeout",
+                failure_reason="Timeout waiting for banking app confirmation after Pay Now",
+                screenshot_path=screenshot,
+            )
+        logger.info("Banking app confirmed — checking payment result")
         await core_client.update_order(request.order_id, {
             "fulfillmentPhase": "PurchasingCoins",
         })
 
-        tab = await browser.get(SELECTORS["recharge_url"])
-        await human_sleep(3, 5)
-        await _check_captcha(tab)
+    result = await wait_for_payment_result(browser, tab, timeout_seconds=60)
+    screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
 
-        # Verify we're actually on the coin/wallet page
-        current_url = ""
-        for attempt in range(3):
-            try:
-                current_url = await tab.evaluate("location.href")
-                current_url = parse_eval(current_url) if not isinstance(current_url, str) else current_url
-                logger.info(f"Current URL after navigation (attempt {attempt + 1}): {current_url}")
-                if "/coin" in current_url or "/wallet" in current_url:
-                    break
-                logger.warning(f"Not on coin/wallet page (URL: {current_url}) — retrying navigation")
-            except Exception as e:
-                logger.warning(f"URL check failed: {e}")
-            await human_sleep(1, 2)
-            tab = await browser.get(SELECTORS["recharge_url"])
-            await human_sleep(3, 5)
-            await _check_captcha(tab)
-        else:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="NavigationFailed",
-                failure_reason=f"Could not navigate to coin page after 3 attempts (stuck at {current_url})",
-                screenshot_path=screenshot,
-            )
-
-        await human_sleep(2, 4)
-        await uncheck_invite_reward(tab)
-        selected = await select_custom_package(tab, request.coin_amount)
-        if not selected:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="UiElementNotFound",
-                failure_reason=f"Could not select custom package for {request.coin_amount} coins",
-                screenshot_path=screenshot,
-            )
-
-        recharged = await click_recharge(tab)
-        if not recharged:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="UiElementNotFound",
-                failure_reason="Could not click Recharge button",
-                screenshot_path=screenshot,
-                captcha_encountered=_captcha["encountered"],
-                captcha_solved=_captcha["solved"],
-                captcha_cost_usd=_captcha["cost"],
-            )
-
-        await _check_captcha(tab)
-
-        add_card_ok = await select_add_card(tab)
-        if not add_card_ok:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="UiElementNotFound",
-                failure_reason="Could not select Add Card payment method",
-                screenshot_path=screenshot,
-            )
-
-        save_card_safe = await skip_link_card_prompt(tab)
-        if not save_card_safe:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="SaveCardToggleFailure",
-                failure_reason="SAFETY ABORT: Could not confirm 'Save card' toggle is unchecked — refusing to risk saving system card to customer account",
-                screenshot_path=screenshot,
-            )
-
-        iframe_visible = await wait_for_element(tab, 'iframe[src*="pipopay"]', timeout=30)
-        if not iframe_visible:
-                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-                return FulfillResult(
-                    success=False,
-                    failure_category="UiElementNotFound",
-                    failure_reason="Pipopay iframe not visible after selecting Add Card",
-                    screenshot_path=screenshot,
-                )
-
-        await core_client.update_order(request.order_id, {
-            "fulfillmentPhase": "PaymentInProgress",
-        })
-
-        filled = await fill_card_form(
-            browser, tab,
-            card_number=request.card_number,
-            card_cvv=request.card_cvv,
-            card_expiry=request.card_expiry,
-            card_holder=request.card_holder_name,
+    if is_payment_success(result):
+        logger.info(f"Payment SUCCESS for order {request.order_id}")
+        if request.tiktok_profile_id:
+            await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
+        return FulfillResult(
+            success=True,
+            screenshot_path=screenshot,
+            fulfillment_phase="Done",
+            captcha_encountered=_captcha["encountered"],
+            captcha_solved=_captcha["solved"],
+            captcha_cost_usd=_captcha["cost"],
         )
-        if not filled:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="UiElementNotFound",
-                failure_reason="Could not fill card form",
-                screenshot_path=screenshot,
-            )
-
-        await human_sleep(1, 3)
-
-        paid = await click_pay_now(tab)
-        if not paid:
-            screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-            return FulfillResult(
-                success=False,
-                failure_category="UiElementNotFound",
-                failure_reason="Could not click Pay now button",
-                screenshot_path=screenshot,
-            )
-
-        # After Pay Now, TikTok may redirect to a 3D Secure page where the
-        # card holder confirms the transaction on their banking app (up to 5 min).
-        logger.info("Checking for 3DS redirect after Pay Now...")
-        if await detect_post_recharge_redirect(tab, timeout=30):
-            logger.bind(hit_3ds=True).info("3DS redirect detected — waiting for banking app confirmation")
-            await core_client.update_order(request.order_id, {
-                "fulfillmentPhase": "WaitingForPaymentConfirm",
-            })
-            returned = await wait_for_post_recharge_return(
-                tab,
-                timeout_minutes=request.payment_confirm_timeout_minutes,
-                callback_client=core_client,
-                order_id=request.order_id,
-            )
-            if not returned:
-                screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-                return FulfillResult(
-                    success=False,
-                    failure_category="PaymentConfirmTimeout",
-                    failure_reason="Timeout waiting for banking app confirmation after Pay Now",
-                    screenshot_path=screenshot,
-                )
-            logger.info("Banking app confirmed — checking payment result")
-            await core_client.update_order(request.order_id, {
-                "fulfillmentPhase": "PurchasingCoins",
-            })
-
-        result = await wait_for_payment_result(browser, tab, timeout_seconds=60)
-        screenshot = await take_screenshot(tab, settings.screenshot_dir, request.order_id)
-
-        if is_payment_success(result):
-            logger.info(f"Payment SUCCESS for order {request.order_id}")
-            if request.tiktok_profile_id:
-                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
-            return FulfillResult(
-                success=True,
-                screenshot_path=screenshot,
-                fulfillment_phase="Done",
-                captcha_encountered=_captcha["encountered"],
-                captcha_solved=_captcha["solved"],
-                captcha_cost_usd=_captcha["cost"],
-            )
+    else:
+        error_code = result.get("error_code", "")
+        if "3DS" in error_code.upper():
+            category = "OtpRequired"
+            reason = f"3DS verification failed: {result.get('message', '')}"
+        elif "RISK" in error_code.upper():
+            category = "PaymentFailed"
+            reason = f"Payment rejected: {error_code} - {result.get('message', '')}"
         else:
-            error_code = result.get("error_code", "")
-            if "3DS" in error_code.upper():
-                category = "OtpRequired"
-                reason = f"3DS verification failed: {result.get('message', '')}"
-            elif "RISK" in error_code.upper():
-                category = "PaymentFailed"
-                reason = f"Payment rejected: {error_code} - {result.get('message', '')}"
-            else:
-                category = "PaymentFailed"
-                detail = result.get("message", "")
-                reason = f"Payment failed: {error_code or result.get('payment_status', 'unknown')}"
-                if detail:
-                    # e.g. CARD_ERROR alone says nothing — keep the on-screen message
-                    reason += f" - {detail}"
+            category = "PaymentFailed"
+            detail = result.get("message", "")
+            reason = f"Payment failed: {error_code or result.get('payment_status', 'unknown')}"
+            if detail:
+                # e.g. CARD_ERROR alone says nothing — keep the on-screen message
+                reason += f" - {detail}"
 
-            logger.warning(f"Payment FAILED for order {request.order_id}: {reason}")
-            if request.tiktok_profile_id:
-                await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
-            return FulfillResult(
-                success=False,
-                failure_category=category,
-                failure_reason=reason,
-                screenshot_path=screenshot,
-                fulfillment_phase="Done",
-                captcha_encountered=_captcha["encountered"],
-                captcha_solved=_captcha["solved"],
-                captcha_cost_usd=_captcha["cost"],
-            )
-
-    finally:
-        await teardown_session_browser(browser, profile, request.tiktok_profile_id, core_client, is_ephemeral, refresh_cookies)
+        logger.warning(f"Payment FAILED for order {request.order_id}: {reason}")
+        if request.tiktok_profile_id:
+            await core_client.update_tiktok_profile(request.tiktok_profile_id, {"sessionValid": True, "markUsed": True})
+        return FulfillResult(
+            success=False,
+            failure_category=category,
+            failure_reason=reason,
+            screenshot_path=screenshot,
+            fulfillment_phase="Done",
+            captcha_encountered=_captcha["encountered"],
+            captcha_solved=_captcha["solved"],
+            captcha_cost_usd=_captcha["cost"],
+        )
 
 
-async def _do_login_only(request: FulfillRequest, core_client: CoreClient, settings) -> FulfillResult:
+async def _do_login_only(request: FulfillRequest, core_client: CoreClient, settings, session: SessionHandle) -> FulfillResult:
     """QR login only — used both to add a brand-new account (then identify + link
     it) and to re-establish a stale session on an existing profile. No purchase."""
     is_new_account = not request.profile_path
@@ -337,7 +383,6 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
 
     warm = None
     is_ephemeral = False
-    refresh_cookies = False
     if is_new_account and settings.warm_pool_size > 0:
         warm = await get_warm_pool(settings).acquire()
 
@@ -350,6 +395,11 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
     else:
         profile = request.profile_path or profile_path(settings.profile_dir, request.order_id)
         browser = await launch_browser(profile, sadcaptcha_api_key=settings.sadcaptcha_api_key)
+
+    session.browser = browser
+    session.profile = profile
+    session.is_ephemeral = is_ephemeral
+    session.tiktok_profile_id = profile_id
 
     browser_ready_seconds = round(time.monotonic() - flow_started_at, 2)
     logger.bind(browser_ready_seconds=browser_ready_seconds, warm_pool_hit=warm is not None).info(
@@ -383,7 +433,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
                 failure_reason="QR scan timeout",
                 screenshot_path=screenshot,
             )
-        refresh_cookies = True
+        session.refresh_cookies = True
 
         if is_new_account:
             logger.info("Login succeeded — waiting for page to settle before fetching identity")
@@ -402,13 +452,15 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             if warm is not None:
                 # Chrome must release its handles on the profile dir before it
                 # can be moved — close it now instead of waiting for the
-                # outer `finally` (which still runs afterward, harmlessly, on
-                # an already-closed browser).
+                # background teardown (which still runs afterward, harmlessly,
+                # on an already-closed browser).
                 await close_browser(browser)
                 profile = graduate_profile(profile, settings.profile_dir, request.order_id)
+                session.profile = profile
 
             profile_record = await core_client.create_tiktok_profile(request.user_id, username, profile, new_account_cookies_json)
             profile_id = profile_record.get("id")
+            session.tiktok_profile_id = profile_id
             await core_client.update_tiktok_profile(profile_id, {
                 "sessionValid": True,
                 "avatarUrl": identity.get("avatar_url"),
@@ -416,6 +468,7 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
             })
         else:
             profile_id = request.tiktok_profile_id
+            session.tiktok_profile_id = profile_id
             await core_client.update_tiktok_profile(profile_id, {"sessionValid": True})
 
         return FulfillResult(success=True, fulfillment_phase="Done", tiktok_profile_id=profile_id or "")
@@ -425,6 +478,3 @@ async def _do_login_only(request: FulfillRequest, core_client: CoreClient, setti
         logger.error(f"Add-account/re-login error for {request.order_id}: {e}")
         logger.error(traceback.format_exc())
         return FulfillResult(success=False, failure_category="Unknown", failure_reason=str(e))
-
-    finally:
-        await teardown_session_browser(browser, profile, profile_id, core_client, is_ephemeral, refresh_cookies)
