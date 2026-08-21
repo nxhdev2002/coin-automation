@@ -24,6 +24,14 @@ METRIC_LOG_FIELDS = (
     "hit_3ds",
 )
 
+# Process-wide fields that aren't tied to an order or a specific call site —
+# set once via `logger.configure(extra=...)` at startup (see logging_setup.py)
+# so every log line this instance emits carries them, letting Kibana break
+# down error counts (order_success=false) by the deployed version tag.
+SERVICE_LOG_FIELDS = (
+    "version",
+)
+
 _order_context: ContextVar[dict[str, str] | None] = ContextVar(
     "coin_order_log_context", default=None
 )

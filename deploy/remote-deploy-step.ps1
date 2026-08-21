@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$RepoDir,
+    [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$InfisicalClientId,
     [Parameter(Mandatory = $true)][string]$InfisicalClientSecret,
     [Parameter(Mandatory = $true)][string]$InfisicalProjectId,
@@ -12,14 +13,30 @@ Set-Location $RepoDir
 Write-Host '[STEP 3] capture deployed commit'
 $deployedSha = (git rev-parse HEAD)
 if ($LASTEXITCODE -ne 0) { Write-Host 'ERROR: git rev-parse failed'; exit 1 }
-Write-Host "Deployed commit: $deployedSha"
+Write-Host "Deployed commit: $deployedSha (version $Version)"
 
 Write-Host '[STEP 4] drain in-flight orders on the running instance'
+# The endpoint itself waits up to the order-timeout ceiling (+ margin) server-side —
+# this client-side timeout is just a generous outer bound so a dead connection
+# can't hang the deploy job forever; it must stay above the endpoint's own wait.
+$drained = $true
 try {
-    $r = Invoke-RestMethod -Uri 'http://localhost:8000/drain' -Method Post -TimeoutSec 110 -UseBasicParsing
+    $r = Invoke-RestMethod -Uri 'http://localhost:8000/drain' -Method Post -TimeoutSec 1800 -UseBasicParsing
     Write-Host ('Drain result: ' + ($r | ConvertTo-Json -Compress))
+    $drained = [bool]$r.drained
 } catch {
     Write-Host 'No running instance to drain, continuing'
+}
+
+if (-not $drained) {
+    Write-Host 'ERROR: in-flight order(s) still running past the drain ceiling — aborting deploy WITHOUT killing the current instance so they can finish'
+    try {
+        Invoke-RestMethod -Uri 'http://localhost:8000/drain/resume' -Method Post -TimeoutSec 10 -UseBasicParsing | Out-Null
+        Write-Host 'Resumed accepting orders on the current instance'
+    } catch {
+        Write-Host 'WARNING: failed to resume accepting orders on the current instance — it may still be rejecting new orders, check manually'
+    }
+    exit 1
 }
 
 Write-Host '[STEP 5] kill old process (and its child processes, e.g. browser)'
@@ -45,6 +62,8 @@ setx INFISICAL_SECRET_PATH '/coin-automation' /M
 if ($LASTEXITCODE -ne 0) { Write-Host 'ERROR: setx SECRET_PATH failed'; exit 1 }
 setx GIT_COMMIT $deployedSha /M
 if ($LASTEXITCODE -ne 0) { Write-Host 'ERROR: setx GIT_COMMIT failed'; exit 1 }
+setx VERSION $Version /M
+if ($LASTEXITCODE -ne 0) { Write-Host 'ERROR: setx VERSION failed'; exit 1 }
 
 Write-Host '[STEP 8] schtasks create'
 schtasks /create /tn coin-automation /tr "$RepoDir\.venv\Scripts\python.exe $RepoDir\run.py" /sc onlogon /ru Administrator /rp $VpsPassword /rl highest /it /f

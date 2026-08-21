@@ -1,7 +1,7 @@
 import sys
 from loguru import logger
 
-from .logging_context import ORDER_LOG_FIELDS, METRIC_LOG_FIELDS, patch_record
+from .logging_context import ORDER_LOG_FIELDS, METRIC_LOG_FIELDS, SERVICE_LOG_FIELDS, patch_record
 
 
 def build_log_document(record) -> dict:
@@ -19,7 +19,7 @@ def build_log_document(record) -> dict:
         "line": record["line"],
         "namespace": "VCCUS-CoinAutomation",
     }
-    for key in ORDER_LOG_FIELDS + METRIC_LOG_FIELDS:
+    for key in ORDER_LOG_FIELDS + METRIC_LOG_FIELDS + SERVICE_LOG_FIELDS:
         value = record["extra"].get(key)
         if value not in (None, ""):
             doc[key] = value
@@ -27,10 +27,12 @@ def build_log_document(record) -> dict:
 
 
 def setup_logging(log_dir: str, es_uri: str = "", es_username: str = "",
-                  es_password: str = "", es_index_format: str = "coin-automation-logs"):
+                  es_password: str = "", es_index_format: str = "coin-automation-logs",
+                  version: str = "unknown"):
     logger.remove()
-    # Only sets the patcher — handlers are left alone since `handlers` is not passed.
-    logger.configure(patcher=patch_record)
+    # Sets the patcher and a default `extra["version"]` every record starts with
+    # (see SERVICE_LOG_FIELDS) — handlers are left alone since `handlers` isn't passed.
+    logger.configure(patcher=patch_record, extra={"version": version})
 
     log_format = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {module}:{function}:{line} | {message}"
 

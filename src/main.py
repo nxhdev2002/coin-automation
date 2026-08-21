@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
         settings.es_username,
         settings.es_password,
         settings.es_index_format,
+        version=os.getenv("VERSION", "unknown"),
     )
 
     if settings.warm_pool_size > 0:

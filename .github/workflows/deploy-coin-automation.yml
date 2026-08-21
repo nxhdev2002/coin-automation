@@ -2,8 +2,6 @@ name: Deploy coin-automation to VPS
 
 on:
   push:
-    branches:
-      - main
     tags:
       - 'v*'
   workflow_dispatch:
@@ -75,8 +73,13 @@ jobs:
           password: ${{ steps.vps.outputs.VPS_PASSWORD }}
           port: ${{ steps.vps.outputs.VPS_PORT }}
           debug: true
+          # Draining in-flight orders now waits up to the order-timeout ceiling
+          # (~17 min by default) before the remote script proceeds — the
+          # action's own default (10m) would otherwise cut the SSH session
+          # while that wait is still legitimately in progress.
+          command_timeout: 30m
           script: |
-            echo [STEP 1] git reset & cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1) & git reset --hard HEAD || (echo ERROR: git reset failed & exit 1) & echo [STEP 2] git pull & git pull origin main || (echo ERROR: git pull failed & exit 1) & echo [STEP 3-10] run remote deploy script & powershell -NoProfile -ExecutionPolicy Bypass -File deploy\remote-deploy-step.ps1 -RepoDir "${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}" -InfisicalClientId "${{ secrets.INFISICAL_CLIENT_ID }}" -InfisicalClientSecret "${{ secrets.INFISICAL_CLIENT_SECRET }}" -InfisicalProjectId "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" -VpsPassword "${{ steps.vps.outputs.VPS_PASSWORD }}" || (echo ERROR: remote deploy script failed & exit 1)
+            echo [STEP 1] git fetch tags & cd ${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }} || (echo ERROR: cd failed & exit 1) & git reset --hard HEAD || (echo ERROR: git reset failed & exit 1) & echo [STEP 2] git fetch & checkout tag & git fetch origin --tags || (echo ERROR: git fetch failed & exit 1) & git checkout "${{ github.ref_name }}" || (echo ERROR: git checkout tag failed & exit 1) & echo [STEP 3-10] run remote deploy script & powershell -NoProfile -ExecutionPolicy Bypass -File deploy\remote-deploy-step.ps1 -RepoDir "${{ steps.vps.outputs.VPS_COIN_AUTOMATION_DIR }}" -Version "${{ github.ref_name }}" -InfisicalClientId "${{ secrets.INFISICAL_CLIENT_ID }}" -InfisicalClientSecret "${{ secrets.INFISICAL_CLIENT_SECRET }}" -InfisicalProjectId "${{ steps.app.outputs.INFISICAL_PROJECT_ID_APP }}" -VpsPassword "${{ steps.vps.outputs.VPS_PASSWORD }}" || (echo ERROR: remote deploy script failed & exit 1)
 
       - name: Telegram notify
         if: always()

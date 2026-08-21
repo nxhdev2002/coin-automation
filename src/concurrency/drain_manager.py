@@ -40,6 +40,12 @@ class DrainManager:
     def start_draining(self) -> None:
         self._draining = True
 
+    def stop_draining(self) -> None:
+        """Undo start_draining — used when a deploy gives up waiting and aborts
+        without killing this instance, so it goes back to accepting orders
+        instead of being stuck rejecting everything until someone restarts it."""
+        self._draining = False
+
     async def wait_drained(self, timeout_seconds: float) -> bool:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout_seconds
