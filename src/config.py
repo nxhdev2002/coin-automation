@@ -14,6 +14,10 @@ class Settings(BaseModel):
     # Number of Chrome instances kept pre-launched (empty profile) for the
     # new-account QR login path, to skip Chrome's cold-start latency. 0 disables.
     warm_pool_size: int = 1
+    # A pooled browser sitting idle this long (e.g. overnight, no new-account
+    # orders) is discarded on next acquire rather than handed out — its CDP
+    # connection can go stale well before Chrome itself would time out.
+    warm_pool_max_age_minutes: float = 30
     qr_timeout_minutes: int = 5
     # hard ceiling for one whole fulfillment; <= 0 disables
     order_timeout_minutes: float = 15
